@@ -1,0 +1,17 @@
+Metric,Portfolio,Benchmark
+Annualised return,100.76%,63.26%
+Annualised volatility,17.20%,23.81%
+Daily std dev,1.0835%,1.5001%
+Sharpe ratio,3.81,—
+Sortino ratio,16.07,—
+Treynor ratio,2.2610,—
+Calmar ratio,25.18,—
+Information ratio,1.06,—
+Tracking error (ann),19.47%,—
+Beta (vs benchmark),0.427,1.000
+Jensen's alpha (ann),48.86%,—
+R-squared,0.349,—
+Max drawdown,-3.83%,-5.69%
+Up capture ratio,63.1%,100%
+Down capture ratio,28.1%,100%
+Trading days,33,33
