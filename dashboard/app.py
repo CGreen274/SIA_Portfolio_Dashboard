@@ -208,6 +208,55 @@ def compute_all():
     eq_dr.columns = [name_map.get(t, t) for t in eq_tickers]
     corr = eq_dr.corr()
 
+    # ── FX attribution ───────────────────────────────────────
+    # Map each country code → yfinance FX ticker (CCY→USD rate)
+    _FX_MAP = {
+        "GB": "GBPUSD=X", "JP": "JPYUSD=X", "ZA": "ZARUSD=X",
+        "IN": "INRUSD=X", "BR": "BRLUSD=X", "TW": "TWDUSD=X",
+        "ID": "IDRUSD=X", "MX": "MXNUSD=X", "IT": "EURUSD=X",
+        "FR": "EURUSD=X", "DE": "EURUSD=X", "CH": "CHFUSD=X",
+        "TH": "THBUSD=X", "SA": "SARUSD=X",
+    }
+    fx_tickers = list(set(_FX_MAP.values()))
+    try:
+        fx_prices = yf.download(
+            fx_tickers,
+            start=(pd.Timestamp(prices.index[0]) - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
+            end=(pd.Timestamp(prices.index[-1]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            auto_adjust=True, progress=False,
+        )
+        if isinstance(fx_prices.columns, pd.MultiIndex):
+            fx_prices = fx_prices["Close"]
+        fx_prices = fx_prices.ffill().reindex(prices.index, method="ffill")
+    except Exception:
+        fx_prices = pd.DataFrame(index=prices.index)
+
+    fx_attr = []
+    for _, row in positions.iterrows():
+        tk = row["ticker"]
+        ctry = row["country"]
+        fx_tk = _FX_MAP.get(ctry)
+        local_ret = (prices[tk].iloc[-1] / prices[tk].iloc[0] - 1) * 100
+        if fx_tk and fx_tk in fx_prices.columns:
+            fx_start = fx_prices[fx_tk].iloc[0]
+            fx_end = fx_prices[fx_tk].iloc[-1]
+            if pd.notna(fx_start) and pd.notna(fx_end) and fx_start > 0:
+                fx_ret = (fx_end / fx_start - 1) * 100
+                usd_ret = ((1 + local_ret / 100) * (1 + fx_ret / 100) - 1) * 100
+            else:
+                fx_ret = 0.0
+                usd_ret = local_ret
+        else:
+            fx_ret = 0.0
+            usd_ret = local_ret
+        fx_attr.append({
+            "name": row["name"], "ticker": tk, "country": ctry,
+            "local_ret": round(local_ret, 2),
+            "fx_ret": round(fx_ret, 2),
+            "usd_ret": round(usd_ret, 2),
+        })
+    fx_df = pd.DataFrame(fx_attr)
+
     return {
         "prices": prices,
         "port_return": port_return,
@@ -230,6 +279,7 @@ def compute_all():
         "max_dd_val": dd_port.min(),
         "ir": ir,
         "name_map": name_map,
+        "fx_df": fx_df,
     }
 
 
@@ -241,6 +291,77 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
 )
 server = app.server  # expose for gunicorn
+
+
+def _build_fx_section(d):
+    """Build the FX / local return attribution table and chart."""
+    fx = d["fx_df"].copy()
+    fx = fx.sort_values("usd_ret", ascending=False)
+
+    # Grouped bar chart
+    fx_fig = go.Figure()
+    fx_fig.add_trace(go.Bar(
+        x=fx["name"], y=fx["local_ret"], name="Local Return %",
+        marker_color="#42a5f5", opacity=0.85,
+    ))
+    fx_fig.add_trace(go.Bar(
+        x=fx["name"], y=fx["fx_ret"], name="FX Effect %",
+        marker_color="#ffa726", opacity=0.85,
+    ))
+    fx_fig.add_trace(go.Scatter(
+        x=fx["name"], y=fx["usd_ret"], name="USD Return %",
+        mode="markers+lines", line=dict(color="#00e676", width=2),
+        marker=dict(size=7, color="#00e676"),
+    ))
+    fx_fig.update_layout(
+        title="Return Decomposition — Local Currency vs FX Effect",
+        template="plotly_dark", paper_bgcolor="#0f0f23",
+        plot_bgcolor="#1a1a2e", barmode="relative",
+        yaxis_title="Return (%)", height=400,
+        margin=dict(l=50, r=20, t=60, b=80),
+        legend=dict(orientation="h", y=1.12),
+        xaxis=dict(tickangle=-45, tickfont=dict(size=9)),
+    )
+
+    fx_table = dash_table.DataTable(
+        data=fx.to_dict("records"),
+        columns=[
+            {"name": "Name", "id": "name"},
+            {"name": "Ticker", "id": "ticker"},
+            {"name": "Country", "id": "country"},
+            {"name": "Local Ret %", "id": "local_ret"},
+            {"name": "FX Effect %", "id": "fx_ret"},
+            {"name": "USD Ret %", "id": "usd_ret"},
+        ],
+        sort_action="native",
+        style_header={
+            "backgroundColor": "#16213e", "color": "#e0e0e0",
+            "fontWeight": "bold", "fontSize": "0.8rem",
+            "borderBottom": "2px solid #ffa726",
+        },
+        style_cell={
+            "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+            "fontSize": "0.8rem", "padding": "6px 12px",
+            "border": "1px solid #2a2a4a",
+        },
+        style_data_conditional=[
+            {"if": {"filter_query": "{fx_ret} > 0", "column_id": "fx_ret"},
+             "color": "#00e676"},
+            {"if": {"filter_query": "{fx_ret} < 0", "column_id": "fx_ret"},
+             "color": "#ff5252"},
+            {"if": {"filter_query": "{usd_ret} > 0", "column_id": "usd_ret"},
+             "color": "#00e676", "fontWeight": "bold"},
+            {"if": {"filter_query": "{usd_ret} < 0", "column_id": "usd_ret"},
+             "color": "#ff5252", "fontWeight": "bold"},
+        ],
+    )
+
+    return html.Div([
+        dbc.Row(dbc.Col(
+            dcc.Graph(figure=fx_fig, config={"displayModeBar": False}),
+        ), className="mb-3"),
+        fx_table,
+    ])
 
 
 def kpi_card(title, value, sub=None, color="primary"):
@@ -930,6 +1051,10 @@ def refresh_dashboard(_):
         # Positions table
         html.H5("Holdings", className="text-light mb-2"),
         pos_table,
+
+        # ── FX / Local return attribution ────────────────────
+        html.H5("Return Attribution — Local vs Currency", className="text-light mt-4 mb-2"),
+        _build_fx_section(d),
 
         # Individual stock chart
         dbc.Row(dbc.Col(
