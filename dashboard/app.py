@@ -651,31 +651,27 @@ def refresh_dashboard(_):
 
     # ── Dividend yield analysis ────────────────────────────
     def _safe_yield(info):
-        """Return (trailing, forward) yields as decimals.
+        """Return (trailing, forward) yields as decimals (0.02 = 2%).
 
-        GBp/ZAc: price in minor units, dividendRate in major units,
-        so rate/price is 100x too small. trailingAnnualDividendYield
-        has the same issue. dividendYield is always % form.
+        Uses dividendYield directly – yfinance returns it in percentage
+        form (e.g. 2.08 for 2.08%) for ALL currencies including GBp/ZAc,
+        so we just divide by 100 to get a decimal.
         """
-        ccy = (info.get("currency") or "")
-        is_minor = len(ccy) == 3 and ccy[-1].islower()
-        minor_fix = 100 if is_minor else 1
+        # Forward yield – dividendYield is always correct % form
+        raw_fwd = info.get("dividendYield")
+        fwd = raw_fwd / 100 if raw_fwd is not None else None
 
-        # Forward: compute from rate/price (most reliable)
-        rate = info.get("dividendRate")
-        px   = info.get("currentPrice") or info.get("regularMarketPrice")
-        if rate and px and px > 0:
-            fwd = (rate / px) * minor_fix
+        # Trailing yield – also use dividendYield as best proxy;
+        # trailingAnnualDividendYield is broken for GBp/ZAc tickers
+        raw_trail = info.get("trailingAnnualDividendYield")
+        if raw_trail is not None and raw_trail > 0:
+            # For non-minor currencies this is a correct decimal;
+            # for GBp/ZAc it's 100x too small, so just use fwd as fallback
+            ccy = (info.get("currency") or "")
+            is_minor = len(ccy) == 3 and ccy[-1].islower()
+            trail = raw_trail * 100 if is_minor else raw_trail
         else:
-            raw = info.get("dividendYield")
-            fwd = raw / 100 if raw is not None else None
-
-        # Trailing: decimal but 100x too small for minor ccy
-        trail = info.get("trailingAnnualDividendYield")
-        if trail is not None:
-            trail = float(trail) * minor_fix
-        else:
-            trail = None
+            trail = fwd  # fallback to forward
 
         return trail, fwd
 
