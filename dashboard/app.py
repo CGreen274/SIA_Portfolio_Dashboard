@@ -40,6 +40,7 @@ COUNTRY_NAMES = {
     "BR": "Brazil", "TW": "Taiwan", "ID": "Indonesia",
     "MX": "Mexico", "IT": "Italy", "CH": "Switzerland",
     "DE": "Germany", "TH": "Thailand", "SA": "Saudi Arabia",
+    "FR": "France",
 }
 
 # ── Load data from notebook CSVs ─────────────────────────────────
@@ -66,7 +67,6 @@ def load_fundamentals():
         "HANJAYA MANDALA SAMPOERNA":     "HMSP.JK",
         "KIMBERLY-CLARK DE MEXICO SA":   "KIMBERA.MX",
         "MR PRICE GROUP LTD":            "MRP.JO",
-        "ROCHE HOLDING AG":              "ROG.SW",
         "MARUWA CO LTD":                 "5344.T",
         "DORMAKABA HOLDINGS AG":         "DOKA.SW",
         "BUMRUNGRAD HOSPITAL PCL":       "BH.BK",
@@ -652,9 +652,12 @@ def refresh_dashboard(_):
     # ── Dividend yield analysis ────────────────────────────
     def _safe_yield(info):
         """Return (trailing, forward) yields as decimals.
-        yfinance dividendYield is unreliable for some non-US tickers
-        (e.g. 2059.TW=0.88, 5344.T=0.15). Cross-validate against
-        trailingAnnualDividendYield and dividendRate/price."""
+
+        Audit of all 22 tickers shows:
+        - dividendYield is ALWAYS in percentage form (2.95 = 2.95%)
+        - trailingAnnualDividendYield is decimal BUT 100x too small
+          for minor-currency tickers (GBp pence, ZAc cents).
+        """
         def _f(v):
             if v is None:
                 return None
@@ -664,23 +667,17 @@ def refresh_dashboard(_):
                 return None
             return None if np.isnan(v) else v
 
-        trail = _f(info.get("trailingAnnualDividendYield"))
-        fwd   = _f(info.get("dividendYield"))
-        rate  = _f(info.get("dividendRate"))
-        px    = _f(info.get("currentPrice")) or _f(info.get("regularMarketPrice"))
-        computed = (rate / px) if (rate and px and px > 0) else None
+        ccy = (info.get("currency") or "")
+        is_minor = len(ccy) == 3 and ccy[-1].islower()  # GBp, ZAc
 
-        # If computed exists and fwd disagrees by >5x, replace
-        if computed and (fwd is None or abs(fwd - computed) / max(computed, 1e-9) > 5):
-            fwd = computed
-        # If trail exists and fwd > 10 * trail, fwd is bogus
-        if trail and fwd and trail > 0 and fwd / trail > 10:
-            fwd = trail
-        # Normalise: >1 means already in % form
-        if trail is not None and trail > 1:
-            trail = trail / 100
-        if fwd is not None and fwd > 1:
-            fwd = fwd / 100
+        trail = _f(info.get("trailingAnnualDividendYield"))
+        if trail is not None and is_minor:
+            trail *= 100  # fix minor-currency undercount
+
+        fwd = _f(info.get("dividendYield"))
+        if fwd is not None:
+            fwd = fwd / 100  # always in % form → decimal
+
         return trail, fwd
 
     def _norm_payout(v):

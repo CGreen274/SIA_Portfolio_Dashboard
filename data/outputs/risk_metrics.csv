@@ -1,17 +1,18 @@
-Metric,Portfolio,Benchmark
+Metric,Portfolio,Benchmark (ACWX)
 Annualised return,100.76%,63.26%
 Annualised volatility,17.20%,23.81%
 Daily std dev,1.0835%,1.5001%
-Sharpe ratio,3.81,—
-Sortino ratio,16.07,—
-Treynor ratio,2.2610,—
-Calmar ratio,25.18,—
+Sharpe ratio,3.81,1.88
+Sortino ratio,16.07,3.71
+Treynor ratio,2.2610,0.5896
+Calmar ratio,25.18,10.36
 Information ratio,1.06,—
 Tracking error (ann),19.47%,—
 Beta (vs benchmark),0.427,1.000
-Jensen's alpha (ann),48.86%,—
-R-squared,0.349,—
+Jensen's alpha (ann),48.86%,0.00%
+R-squared,0.349,1.000
 Max drawdown,-3.83%,-5.69%
-Up capture ratio,63.1%,100%
-Down capture ratio,28.1%,100%
+Downside volatility,6.00%,15.89%
+Up capture ratio,63.1%,100.0%
+Down capture ratio,28.1%,100.0%
 Trading days,33,33
