@@ -737,16 +737,16 @@ def refresh_dashboard(_):
     div_df.drop(columns=["_wt"], inplace=True)
 
     price_only_ret = total_ret
-    # Annualised total return estimate including dividend income
+    # Annualised total return estimate including total shareholder yield
     days_held = (d["prices"].index[-1] - d["prices"].index[0]).days
-    ann_div_boost = port_avg_yield / 100  # annual yield added to return
+    ann_sh_boost = port_total_sh_yield / 100  # div + buyback yield
     price_ann = (1 + price_only_ret) ** (365 / max(days_held, 1)) - 1
-    total_ret_with_div = price_ann + ann_div_boost  # approximate
+    total_ret_with_div = price_ann + ann_sh_boost  # includes buybacks
 
     # ── Dividend reinvestment projection chart ───────────
     # Project forward from inception: price-only NAV vs total return NAV
-    # using actual price history + daily accrual of dividend yield
-    daily_yield = port_avg_yield / 100 / 252  # daily dividend accrual
+    # using actual price history + daily accrual of total shareholder yield
+    daily_yield = port_total_sh_yield / 100 / 252  # daily TSY accrual
     price_nav = d["port_value"] / d["port_value"].iloc[0] * NOTIONAL
     # Build total-return NAV: reinvest dividends daily
     tr_nav = [NOTIONAL]
@@ -769,12 +769,12 @@ def refresh_dashboard(_):
     ))
     reinvest_fig.add_trace(go.Scatter(
         x=tr_nav.index, y=tr_nav,
-        name="Total return NAV (divs reinvested)",
+        name="Total return NAV (TSY reinvested)",
         line=dict(color="#00e676", width=2.5),
         fill="tonexty", fillcolor="rgba(0,230,118,0.1)",
     ))
     reinvest_fig.update_layout(
-        title=f"Dividend Reinvestment Impact — Actual Period  (avg yield {port_avg_yield:.1f}%)",
+        title=f"Total Shareholder Yield Impact — Actual Period  (TSY {port_total_sh_yield:.1f}%)",
         template="plotly_dark", paper_bgcolor="#0f0f23",
         plot_bgcolor="#1a1a2e", yaxis_title="NAV ($)",
         height=350, margin=dict(l=60, r=20, t=60, b=40),
@@ -792,12 +792,12 @@ def refresh_dashboard(_):
     ))
     proj_fig.add_trace(go.Bar(
         x=proj_labels, y=total_ret_proj,
-        name=f"With divs reinvested ({total_ret_with_div:.1%} p.a.)",
+        name=f"With TSY reinvested ({total_ret_with_div:.1%} p.a.)",
         marker_color="#00e676", opacity=0.7,
     ))
     yr10_diff = total_ret_proj[-1] - price_only_proj[-1]
     proj_fig.update_layout(
-        title=f"10-Year Projection — Dividend Reinvestment Adds ${yr10_diff:,.0f}",
+        title=f"10-Year Projection — Total Shareholder Yield Adds ${yr10_diff:,.0f}",
         template="plotly_dark", paper_bgcolor="#0f0f23",
         plot_bgcolor="#1a1a2e", yaxis_title="NAV ($)",
         barmode="group", height=350,
@@ -863,7 +863,7 @@ def refresh_dashboard(_):
                     html.H4(f"{price_ann:.2%}", className="mb-0"),
                 ], md=2),
                 dbc.Col([
-                    html.P("Total Return est. (ann. + divs)", className="text-muted mb-0",
+                    html.P("Total Return est. (ann. + TSY)", className="text-muted mb-0",
                            style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
                     html.H4(f"{total_ret_with_div:.2%}", className="text-warning mb-0"),
                 ], md=2),
