@@ -164,6 +164,16 @@ def compute_all():
     p_daily_std = aligned["port"].std()
     b_daily_std = aligned["bench"].std()
 
+    # Benchmark equivalents
+    b_excess = aligned["bench"] - rf_d
+    b_sharpe = b_excess.mean() / aligned["bench"].std() * np.sqrt(ann) if aligned["bench"].std() > 0 else 0
+    b_down = aligned["bench"][aligned["bench"] < 0]
+    b_down_vol = b_down.std() * np.sqrt(ann) if len(b_down) > 0 else 0
+    b_sortino = (b_ann_ret - RISK_FREE_ANNUAL) / b_down_vol if b_down_vol > 0 else 0
+    b_treynor = (b_ann_ret - RISK_FREE_ANNUAL) / 1.0  # benchmark beta = 1
+    b_max_dd = abs(dd_bench.min())
+    b_calmar = (b_ann_ret - RISK_FREE_ANNUAL) / b_max_dd if b_max_dd > 0 else 0
+
     risk = {
         "Ann. Return": f"{p_ann_ret:.2%}", "Ann. Vol": f"{p_ann_vol:.2%}",
         "Daily Std Dev": f"{p_daily_std:.4%}",
@@ -172,16 +182,19 @@ def compute_all():
         "Info Ratio": f"{ir:.2f}", "Tracking Error": f"{te:.2%}",
         "Beta": f"{beta:.3f}", "Alpha (ann)": f"{alpha_ann:.2%}",
         "R²": f"{r2:.3f}", "Max DD": f"{dd_port.min():.2%}",
+        "Downside Vol": f"{down_vol:.2%}",
         "Up Capture": f"{up_cap:.1f}%", "Down Capture": f"{dn_cap:.1f}%",
     }
     bench_risk = {
         "Ann. Return": f"{b_ann_ret:.2%}", "Ann. Vol": f"{b_ann_vol:.2%}",
         "Daily Std Dev": f"{b_daily_std:.4%}",
-        "Sharpe": "—", "Sortino": "—", "Treynor": "—", "Calmar": "—",
+        "Sharpe": f"{b_sharpe:.2f}", "Sortino": f"{b_sortino:.2f}",
+        "Treynor": f"{b_treynor:.4f}", "Calmar": f"{b_calmar:.2f}",
         "Info Ratio": "—", "Tracking Error": "—",
-        "Beta": "1.000", "Alpha (ann)": "—", "R²": "—",
-        "Max DD": f"{dd_bench.min():.2%}",
-        "Up Capture": "100%", "Down Capture": "100%",
+        "Beta": "1.000", "Alpha (ann)": "0.00%",
+        "R²": "1.000", "Max DD": f"{dd_bench.min():.2%}",
+        "Downside Vol": f"{b_down_vol:.2%}",
+        "Up Capture": "100.0%", "Down Capture": "100.0%",
     }
     risk_df = pd.DataFrame({
         "Metric": list(risk.keys()),
