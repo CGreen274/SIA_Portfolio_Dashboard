@@ -649,31 +649,41 @@ def refresh_dashboard(_):
         hovermode="x unified",
     )
 
-    # ── Dividend yield analysis ────────────────────────────
+    # ── Total shareholder yield analysis ─────────────────────
     def _safe_yield(info):
-        """Return (trailing, forward) yields as decimals (0.02 = 2%).
-
-        Uses dividendYield directly – yfinance returns it in percentage
-        form (e.g. 2.08 for 2.08%) for ALL currencies including GBp/ZAc,
-        so we just divide by 100 to get a decimal.
-        """
-        # Forward yield – dividendYield is always correct % form
+        """Return (trailing, forward) yields as decimals (0.02 = 2%)."""
         raw_fwd = info.get("dividendYield")
         fwd = raw_fwd / 100 if raw_fwd is not None else None
-
-        # Trailing yield – also use dividendYield as best proxy;
-        # trailingAnnualDividendYield is broken for GBp/ZAc tickers
         raw_trail = info.get("trailingAnnualDividendYield")
         if raw_trail is not None and raw_trail > 0:
-            # For non-minor currencies this is a correct decimal;
-            # for GBp/ZAc it's 100x too small, so just use fwd as fallback
             ccy = (info.get("currency") or "")
             is_minor = len(ccy) == 3 and ccy[-1].islower()
             trail = raw_trail * 100 if is_minor else raw_trail
         else:
-            trail = fwd  # fallback to forward
-
+            trail = fwd
         return trail, fwd
+
+    def _buyback_yield(ticker_obj, info):
+        """Net buyback yield from most recent annual cash-flow statement."""
+        try:
+            cf = ticker_obj.cashflow
+            mktcap = info.get("marketCap")
+            if cf is None or cf.empty or not mktcap or mktcap <= 0:
+                return None
+            repurchase = 0
+            if "Repurchase Of Capital Stock" in cf.index:
+                v = cf.loc["Repurchase Of Capital Stock"].dropna()
+                if len(v) > 0:
+                    repurchase = float(v.iloc[0])
+            issuance = 0
+            if "Issuance Of Capital Stock" in cf.index:
+                v = cf.loc["Issuance Of Capital Stock"].dropna()
+                if len(v) > 0:
+                    issuance = float(v.iloc[0])
+            net_buyback = -(repurchase + issuance)
+            return net_buyback / mktcap
+        except Exception:
+            return None
 
     def _norm_payout(v):
         if v is None:
@@ -689,22 +699,29 @@ def refresh_dashboard(_):
     div_data = []
     for _, h in pos.iterrows():
         try:
-            info = yf.Ticker(h["ticker"]).info
+            tk = yf.Ticker(h["ticker"])
+            info = tk.info
             trail_y, fwd_y = _safe_yield(info)
             payout  = _norm_payout(info.get("payoutRatio"))
+            bb_y    = _buyback_yield(tk, info)
         except Exception:
-            trail_y = fwd_y = payout = None
+            trail_y = fwd_y = payout = bb_y = None
+        fwd_pct   = round(fwd_y * 100, 2)   if fwd_y   else None
+        bb_pct    = round(bb_y * 100, 2)     if bb_y is not None else None
+        total_sh  = round((fwd_pct or 0) + (bb_pct or 0), 2)
         div_data.append({
             "Name":            h["name"],
             "Country":         h["country"],
             "Trailing Yield %": round(trail_y * 100, 2) if trail_y else None,
-            "Forward Yield %":  round(fwd_y * 100, 2)   if fwd_y   else None,
+            "Forward Yield %":  fwd_pct,
+            "Buyback Yield %":  bb_pct,
+            "Total SH Yield %": total_sh,
             "Payout Ratio %":   round(payout * 100, 1)   if payout  else None,
             "Current Value":    round(h["current_value"], 0),
         })
     div_df = pd.DataFrame(div_data)
 
-    # Estimated annual income per holding
+    # Estimated annual income per holding (dividends only)
     div_df["Est. Ann. Income"] = (
         div_df["Current Value"] * div_df["Forward Yield %"].fillna(div_df["Trailing Yield %"]).fillna(0) / 100
     ).round(0)
@@ -713,6 +730,12 @@ def refresh_dashboard(_):
     total_eq_value = div_df["Current Value"].sum()
     total_income = div_df["Est. Ann. Income"].sum()
     port_avg_yield = (total_income / total_eq_value * 100) if total_eq_value > 0 else 0
+    # Weighted buyback yield
+    div_df["_wt"] = div_df["Current Value"] / total_eq_value if total_eq_value > 0 else 0
+    port_bb_yield = (div_df["Buyback Yield %"].fillna(0) * div_df["_wt"]).sum()
+    port_total_sh_yield = port_avg_yield + port_bb_yield
+    div_df.drop(columns=["_wt"], inplace=True)
+
     price_only_ret = total_ret
     # Annualised total return estimate including dividend income
     days_held = (d["prices"].index[-1] - d["prices"].index[0]).days
@@ -800,33 +823,50 @@ def refresh_dashboard(_):
         style_data_conditional=[
             {"if": {"filter_query": "{Forward Yield %} >= 5", "column_id": "Forward Yield %"},
              "color": "#00e676", "fontWeight": "bold"},
+            {"if": {"filter_query": "{Buyback Yield %} > 0", "column_id": "Buyback Yield %"},
+             "color": "#00e676"},
+            {"if": {"filter_query": "{Buyback Yield %} < 0", "column_id": "Buyback Yield %"},
+             "color": "#ff6b6b"},
+            {"if": {"filter_query": "{Total SH Yield %} >= 5", "column_id": "Total SH Yield %"},
+             "color": "#00e676", "fontWeight": "bold"},
         ],
     )
 
     div_impact = dbc.Card(
         dbc.CardBody([
-            html.H6("Dividend Income Impact", className="text-light mb-3"),
+            html.H6("Total Shareholder Yield", className="text-light mb-3"),
             dbc.Row([
                 dbc.Col([
-                    html.P("Wtd Avg Yield", className="text-muted mb-0",
+                    html.P("Wtd Div Yield", className="text-muted mb-0",
                            style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
                     html.H4(f"{port_avg_yield:.2f}%", className="text-success mb-0"),
-                ], md=3),
+                ], md=2),
+                dbc.Col([
+                    html.P("Wtd Buyback Yield", className="text-muted mb-0",
+                           style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
+                    html.H4(f"{port_bb_yield:+.2f}%",
+                             className=f"{'text-success' if port_bb_yield >= 0 else 'text-danger'} mb-0"),
+                ], md=2),
+                dbc.Col([
+                    html.P("Total SH Yield", className="text-muted mb-0",
+                           style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
+                    html.H4(f"{port_total_sh_yield:.2f}%", className="text-warning mb-0"),
+                ], md=2),
                 dbc.Col([
                     html.P("Est. Annual Income", className="text-muted mb-0",
                            style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
                     html.H4(f"${total_income:,.0f}", className="text-info mb-0"),
-                ], md=3),
+                ], md=2),
                 dbc.Col([
                     html.P("Price-Only Return (ann.)", className="text-muted mb-0",
                            style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
                     html.H4(f"{price_ann:.2%}", className="mb-0"),
-                ], md=3),
+                ], md=2),
                 dbc.Col([
                     html.P("Total Return est. (ann. + divs)", className="text-muted mb-0",
                            style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
                     html.H4(f"{total_ret_with_div:.2%}", className="text-warning mb-0"),
-                ], md=3),
+                ], md=2),
             ]),
         ]),
         style={"backgroundColor": "#1a1a2e", "border": "1px solid #4caf50"},
@@ -834,7 +874,7 @@ def refresh_dashboard(_):
     )
 
     div_section = html.Div([
-        html.H5("Dividend Yield Analysis", className="text-light mt-4 mb-2"),
+        html.H5("Total Shareholder Yield — Dividends + Buybacks", className="text-light mt-4 mb-2"),
         div_impact,
         div_table,
         dbc.Row([
