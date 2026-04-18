@@ -653,30 +653,29 @@ def refresh_dashboard(_):
     def _safe_yield(info):
         """Return (trailing, forward) yields as decimals.
 
-        Audit of all 22 tickers shows:
-        - dividendYield is ALWAYS in percentage form (2.95 = 2.95%)
-        - trailingAnnualDividendYield is decimal BUT 100x too small
-          for minor-currency tickers (GBp pence, ZAc cents).
+        GBp/ZAc: price in minor units, dividendRate in major units,
+        so rate/price is 100x too small. trailingAnnualDividendYield
+        has the same issue. dividendYield is always % form.
         """
-        def _f(v):
-            if v is None:
-                return None
-            try:
-                v = float(v)
-            except (TypeError, ValueError):
-                return None
-            return None if np.isnan(v) else v
-
         ccy = (info.get("currency") or "")
-        is_minor = len(ccy) == 3 and ccy[-1].islower()  # GBp, ZAc
+        is_minor = len(ccy) == 3 and ccy[-1].islower()
+        minor_fix = 100 if is_minor else 1
 
-        trail = _f(info.get("trailingAnnualDividendYield"))
-        if trail is not None and is_minor:
-            trail *= 100  # fix minor-currency undercount
+        # Forward: compute from rate/price (most reliable)
+        rate = info.get("dividendRate")
+        px   = info.get("currentPrice") or info.get("regularMarketPrice")
+        if rate and px and px > 0:
+            fwd = (rate / px) * minor_fix
+        else:
+            raw = info.get("dividendYield")
+            fwd = raw / 100 if raw is not None else None
 
-        fwd = _f(info.get("dividendYield"))
-        if fwd is not None:
-            fwd = fwd / 100  # always in % form → decimal
+        # Trailing: decimal but 100x too small for minor ccy
+        trail = info.get("trailingAnnualDividendYield")
+        if trail is not None:
+            trail = float(trail) * minor_fix
+        else:
+            trail = None
 
         return trail, fwd
 
