@@ -91,10 +91,13 @@ def load_fundamentals():
     return matched[cols].set_index("ticker")
 
 
-def pull_live_prices(tickers):
+def pull_live_prices(tickers, end_date=None):
     """Pull adjusted close prices from yfinance since inception."""
     start = (pd.Timestamp(INCEPTION) - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
-    raw = yf.download(tickers, start=start, auto_adjust=True, progress=False)
+    kw = dict(start=start, auto_adjust=True, progress=False)
+    if end_date:
+        kw["end"] = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    raw = yf.download(tickers, **kw)
     if isinstance(raw.columns, pd.MultiIndex):
         prices = raw["Close"].copy()
     else:
@@ -105,12 +108,12 @@ def pull_live_prices(tickers):
     return prices
 
 
-def compute_all():
+def compute_all(end_date=None):
     """Compute every metric from live prices + snapshot CSVs."""
     snap = load_snapshot()
     eq_tickers = snap["ticker"].tolist()
     all_tickers = eq_tickers + [BENCHMARK]
-    prices = pull_live_prices(all_tickers)
+    prices = pull_live_prices(all_tickers, end_date=end_date)
 
     # Shares & cost from snapshot
     positions = snap.copy()
@@ -437,6 +440,12 @@ app.layout = build_layout
 def refresh_dashboard(_):
     """Rebuild the entire dashboard from live data."""
     d = compute_all()
+    content, last_date = build_dashboard_content(d)
+    return content, f"Last refreshed: {last_date}"
+
+
+def build_dashboard_content(d):
+    """Build all dashboard visuals from a compute_all() result dict."""
     pos = d["pos_pnl"]
     last_date = d["prices"].index[-1].strftime("%d %b %Y %H:%M")
     total_ret = d["port_return"].iloc[-1]
@@ -1097,7 +1106,7 @@ def refresh_dashboard(_):
         # Trade log
         trade_section,
 
-    ]), f"Last refreshed: {last_date}"
+    ]), last_date
 
 
 # ── Run ───────────────────────────────────────────────────────────
