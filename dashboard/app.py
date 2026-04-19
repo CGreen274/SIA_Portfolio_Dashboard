@@ -43,6 +43,17 @@ COUNTRY_NAMES = {
     "FR": "France",
 }
 
+# Chart export config — hover to see mode bar, camera icon downloads
+# transparent PNG at 3× resolution (great for reports)
+CHART_CONFIG = {
+    "displayModeBar": "hover",
+    "toImageButtonOptions": {
+        "format": "png",
+        "scale": 3,
+    },
+    "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoScale2d"],
+}
+
 # ── Load data from notebook CSVs ─────────────────────────────────
 
 def load_snapshot():
@@ -358,7 +369,7 @@ def _build_fx_section(d):
 
     return html.Div([
         dbc.Row(dbc.Col(
-            dcc.Graph(figure=fx_fig, config={"displayModeBar": False}),
+            dcc.Graph(figure=fx_fig, config=CHART_CONFIG),
         ), className="mb-3"),
         fx_table,
     ])
@@ -999,8 +1010,8 @@ def refresh_dashboard(_):
         div_impact,
         div_table,
         dbc.Row([
-            dbc.Col(dcc.Graph(figure=reinvest_fig, config={"displayModeBar": False}), md=6),
-            dbc.Col(dcc.Graph(figure=proj_fig, config={"displayModeBar": False}), md=6),
+            dbc.Col(dcc.Graph(figure=reinvest_fig, config=CHART_CONFIG), md=6),
+            dbc.Col(dcc.Graph(figure=proj_fig, config=CHART_CONFIG), md=6),
         ], className="mt-3"),
     ])
 
@@ -1036,16 +1047,16 @@ def refresh_dashboard(_):
 
         # Performance + drawdown
         dbc.Row([
-            dbc.Col(dcc.Graph(figure=perf_fig, config={"displayModeBar": False}), md=12),
+            dbc.Col(dcc.Graph(figure=perf_fig, config=CHART_CONFIG), md=12),
         ], className="mb-2"),
         dbc.Row([
-            dbc.Col(dcc.Graph(figure=dd_fig, config={"displayModeBar": False}), md=12),
+            dbc.Col(dcc.Graph(figure=dd_fig, config=CHART_CONFIG), md=12),
         ], className="mb-3"),
 
         # Exposure pies
         dbc.Row([
-            dbc.Col(dcc.Graph(figure=ctry_fig), md=6),
-            dbc.Col(dcc.Graph(figure=sec_fig), md=6),
+            dbc.Col(dcc.Graph(figure=ctry_fig, config=CHART_CONFIG), md=6),
+            dbc.Col(dcc.Graph(figure=sec_fig, config=CHART_CONFIG), md=6),
         ], className="mb-3"),
 
         # Positions table
@@ -1058,7 +1069,7 @@ def refresh_dashboard(_):
 
         # Individual stock chart
         dbc.Row(dbc.Col(
-            dcc.Graph(figure=stock_fig, config={"displayModeBar": False}),
+            dcc.Graph(figure=stock_fig, config=CHART_CONFIG),
         ), className="mt-4 mb-3"),
 
         # Two-column: risk metrics | CAPM
@@ -1068,13 +1079,13 @@ def refresh_dashboard(_):
                 risk_table,
             ], md=5),
             dbc.Col(
-                dcc.Graph(figure=capm_fig), md=7,
+                dcc.Graph(figure=capm_fig, config=CHART_CONFIG), md=7,
             ),
         ], className="mb-3"),
 
         # Correlation heatmap
         dbc.Row(dbc.Col(
-            dcc.Graph(figure=corr_fig),
+            dcc.Graph(figure=corr_fig, config=CHART_CONFIG),
         ), className="mb-3"),
 
         # Fundamentals
