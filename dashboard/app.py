@@ -22,6 +22,7 @@ import plotly.graph_objects as go
 import yfinance as yf
 from dash import Input, Output, callback, dash_table, dcc, html
 from scipy import stats as sp_stats
+import statsmodels.api as sm
 
 # ── Paths ─────────────────────────────────────────────────────────
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -304,7 +305,50 @@ def compute_all(end_date=None):
         })
     fx_df = pd.DataFrame(fx_attr)
 
-    return {
+    # ── Fama-French 5-factor decomposition ─────────────────────
+    # ETF-proxy factors (Kenneth French data lags; ETFs are real-time)
+    _FF_TICKERS = ["ACWX", "SCZ", "EFA", "EFV", "EFG", "IQLT", "EFAV"]
+    try:
+        ff_raw = yf.download(
+            _FF_TICKERS,
+            start=(pd.Timestamp(prices.index[0]) - pd.Timedelta(days=5)).strftime("%Y-%m-%d"),
+            end=(pd.Timestamp(prices.index[-1]) + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            auto_adjust=True, progress=False,
+        )
+        if isinstance(ff_raw.columns, pd.MultiIndex):
+            ff_px = ff_raw["Close"]
+        else:
+            ff_px = ff_raw
+        ff_px = ff_px.ffill().reindex(prices.index, method="ffill")
+        ff_ret = ff_px.pct_change().dropna()
+
+        rf_daily = (1 + RISK_FREE_ANNUAL) ** (1 / 252) - 1
+        ff_factors = pd.DataFrame({
+            "MKT-RF": ff_ret["ACWX"] - rf_daily,
+            "SMB":    ff_ret["SCZ"] - ff_ret["EFA"],
+            "HML":    ff_ret["EFV"] - ff_ret["EFG"],
+            "RMW":    ff_ret["IQLT"] - ff_ret["ACWX"],
+            "CMA":    ff_ret["EFAV"] - ff_ret["ACWX"],
+        })
+        # Align with portfolio excess returns
+        y = (port_daily - rf_daily).reindex(ff_factors.index).dropna()
+        X = ff_factors.reindex(y.index).dropna()
+        y = y.reindex(X.index)
+        X_const = sm.add_constant(X)
+        ff5_model = sm.OLS(y, X_const).fit()
+        ff5_result = {
+            "params": ff5_model.params,
+            "tvalues": ff5_model.tvalues,
+            "pvalues": ff5_model.pvalues,
+            "rsquared": ff5_model.rsquared,
+            "rsquared_adj": ff5_model.rsquared_adj,
+            "alpha_ann": ff5_model.params.get("const", 0) * 252,
+            "nobs": int(ff5_model.nobs),
+        }
+    except Exception:
+        ff5_result = None
+
+    result = {
         "prices": prices,
         "port_return": port_return,
         "bench_return": bench_return,
@@ -327,10 +371,9 @@ def compute_all(end_date=None):
         "ir": ir,
         "name_map": name_map,
         "fx_df": fx_df,
+        "ff5": ff5_result,
     }
-
-
-# ── Dash app ──────────────────────────────────────────────────────
+    return result
 app = dash.Dash(
     __name__,
     external_stylesheets=[dbc.themes.DARKLY],
@@ -338,6 +381,94 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
 )
 server = app.server  # expose for gunicorn
+
+
+def _build_ff5_section(d):
+    """Build the Fama-French 5-factor regression section."""
+    ff5 = d.get("ff5")
+    if ff5 is None:
+        return html.Div(html.P(
+            "FF5 factor data unavailable for this period.",
+            className="text-muted",
+        ))
+
+    factors = ["const", "MKT-RF", "SMB", "HML", "RMW", "CMA"]
+    nice = {"const": "Alpha (daily)", "MKT-RF": "Market", "SMB": "Size (Small-Big)",
+            "HML": "Value (High-Low)", "RMW": "Profitability (Robust-Weak)",
+            "CMA": "Investment (Cons.-Agg.)"}
+    rows = []
+    for f in factors:
+        coeff = ff5["params"].get(f, 0)
+        t = ff5["tvalues"].get(f, 0)
+        p = ff5["pvalues"].get(f, 1)
+        sig = "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.10 else ""
+        rows.append({
+            "Factor": nice.get(f, f),
+            "Coefficient": round(coeff, 6) if f == "const" else round(coeff, 4),
+            "t-stat": round(t, 2),
+            "p-value": round(p, 4),
+            "Sig.": sig,
+        })
+    ff_df = pd.DataFrame(rows)
+
+    ff_table = dash_table.DataTable(
+        data=ff_df.to_dict("records"),
+        columns=[{"name": c, "id": c} for c in ff_df.columns],
+        style_header={
+            "backgroundColor": "#16213e", "color": "#e0e0e0",
+            "fontWeight": "bold", "fontSize": "0.82rem",
+            "borderBottom": "2px solid #7c4dff",
+        },
+        style_cell={
+            "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+            "fontSize": "0.82rem", "padding": "6px 14px",
+            "border": "1px solid #2a2a4a",
+        },
+        style_data_conditional=[
+            {"if": {"filter_query": '{Sig.} contains "**"'},
+             "fontWeight": "bold", "color": "#00e676"},
+            {"if": {"filter_query": '{Coefficient} < 0', "column_id": "Coefficient"},
+             "color": "#ff5252"},
+        ],
+    )
+
+    # Bar chart of factor loadings (exclude alpha)
+    load_factors = [f for f in factors if f != "const"]
+    coeffs = [ff5["params"].get(f, 0) for f in load_factors]
+    colours = ["#00e676" if c >= 0 else "#ff5252" for c in coeffs]
+    bar_fig = go.Figure(go.Bar(
+        x=[nice.get(f, f) for f in load_factors],
+        y=coeffs,
+        marker_color=colours,
+        text=[f"{c:.3f}" for c in coeffs],
+        textposition="outside",
+    ))
+    bar_fig.update_layout(
+        title=f"FF5 Factor Loadings  ·  R² = {ff5['rsquared']:.3f}  ·  "
+              f"α (ann.) = {ff5['alpha_ann']:.2%}  ·  n = {ff5['nobs']}",
+        template="plotly_dark", paper_bgcolor="#0f0f23",
+        plot_bgcolor="#1a1a2e", yaxis_title="Loading (β)",
+        height=380, margin=dict(l=50, r=20, t=60, b=80),
+        xaxis=dict(tickangle=-20),
+    )
+
+    proxy_note = html.P(
+        "Factor proxies: MKT-RF = ACWX − Rf · SMB = SCZ − EFA · "
+        "HML = EFV − EFG · RMW = IQLT − ACWX · CMA = EFAV − ACWX. "
+        f"Significance: *** p<0.01, ** p<0.05, * p<0.10. "
+        f"Adj. R² = {ff5['rsquared_adj']:.3f}.",
+        className="text-muted mt-2", style={"fontSize": "0.72rem"},
+    )
+
+    return html.Div([
+        html.H5("Fama-French 5-Factor Decomposition",
+                 className="text-light mt-4 mb-2"),
+        dbc.Row([
+            dbc.Col(ff_table, md=5),
+            dbc.Col(dcc.Graph(figure=bar_fig, config=CHART_CONFIG), md=7),
+        ]),
+        proxy_note,
+    ])
 
 
 def _build_fx_section(d):
@@ -1129,6 +1260,9 @@ def build_dashboard_content(d):
         dbc.Row(dbc.Col(
             dcc.Graph(figure=corr_fig, config=CHART_CONFIG),
         ), className="mb-3"),
+
+        # ── Fama-French 5-Factor Decomposition ───────────────
+        _build_ff5_section(d),
 
         # Fundamentals
         fund_section,

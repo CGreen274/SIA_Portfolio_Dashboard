@@ -252,6 +252,54 @@ def build_report(end_date=None) -> str:
 
     ---
 
+    """)
+
+    # ── FF5 section ───────────────────────────────────────────
+    ff5 = d.get("ff5")
+    if ff5:
+        factors = ["const", "MKT-RF", "SMB", "HML", "RMW", "CMA"]
+        nice = {"const": "Alpha (daily)", "MKT-RF": "Market", "SMB": "Size (Small-Big)",
+                "HML": "Value (High-Low)", "RMW": "Profitability (Robust-Weak)",
+                "CMA": "Investment (Cons.-Agg.)"}
+        ff_rows = []
+        for f in factors:
+            coeff = ff5["params"].get(f, 0)
+            t = ff5["tvalues"].get(f, 0)
+            p = ff5["pvalues"].get(f, 1)
+            sig = "***" if p < 0.01 else "**" if p < 0.05 else "*" if p < 0.10 else ""
+            ff_rows.append({
+                "Factor": nice.get(f, f),
+                "Coefficient": round(coeff, 6) if f == "const" else round(coeff, 4),
+                "t-stat": round(t, 2),
+                "p-value": round(p, 4),
+                "Sig.": sig,
+            })
+        ff_df = pd.DataFrame(ff_rows)
+        md += dedent(f"""\
+    ## Fama-French 5-Factor Decomposition
+    **Model:** r_port − Rf = α + β₁(MKT−RF) + β₂(SMB) + β₃(HML) + β₄(RMW) + β₅(CMA) + ε
+
+    | Summary | Value |
+    | --- | --- |
+    | R² | {ff5['rsquared']:.3f} |
+    | Adj. R² | {ff5['rsquared_adj']:.3f} |
+    | Alpha (annualised) | {ff5['alpha_ann']:.2%} |
+    | Observations | {ff5['nobs']} |
+
+    ### Factor Loadings
+    {_df_to_md(ff_df)}
+
+    **Significance:** \\*\\*\\* p<0.01, \\*\\* p<0.05, \\* p<0.10
+
+    **Factor proxies (ETF-based):** MKT-RF = ACWX − Rf · SMB = SCZ − EFA · HML = EFV − EFG · RMW = IQLT − ACWX · CMA = EFAV − ACWX
+
+    ---
+
+    """)
+    else:
+        md += "## Fama-French 5-Factor Decomposition\n_Factor data unavailable for this period._\n\n---\n\n"
+
+    md += dedent(f"""\
     ## FX / Return Attribution
     {fx_md}
 
