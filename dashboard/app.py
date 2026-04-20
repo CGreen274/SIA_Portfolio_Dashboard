@@ -178,6 +178,37 @@ def compute_all(end_date=None):
     p_daily_std = aligned["port"].std()
     b_daily_std = aligned["bench"].std()
 
+    # ── Active Share ─────────────────────────────────────────
+    # AS = 0.5 * Σ|w_port_i - w_bench_i| across all securities.
+    # Estimate each holding's benchmark weight via market-cap share of
+    # the MSCI ACWI ex-US investable universe (~$32 T free-float mkt cap).
+    ACWI_EXUS_MCAP = 32e12  # approximate total free-float market cap (USD)
+    # Map currency → rough USD rate (only need order-of-magnitude accuracy)
+    _CCY_TO_USD = {
+        "JPY": 1/150, "GBp": 1/80, "GBP": 1.27, "ZAc": 1/1800, "ZAR": 1/18,
+        "INR": 1/84, "BRL": 1/5.2, "TWD": 1/32, "IDR": 1/16000,
+        "MXN": 1/17, "EUR": 1.08, "CHF": 1.10, "THB": 1/36,
+        "SAR": 1/3.75, "USD": 1.0,
+    }
+    port_weights = pos_pnl.set_index("ticker")["weight_now"] / 100
+    bench_weights = pd.Series(0.0, index=eq_tickers)
+    for tk in eq_tickers:
+        try:
+            info = yf.Ticker(tk).info
+            mc = info.get("marketCap", 0) or 0
+            ccy = info.get("currency", "USD")
+            fx = _CCY_TO_USD.get(ccy, 1.0)
+            mc_usd = mc * fx
+            bench_weights[tk] = mc_usd / ACWI_EXUS_MCAP
+        except Exception:
+            pass
+    bench_weights = bench_weights.clip(upper=0.05)
+    overlap = port_weights.reindex(eq_tickers).fillna(0)
+    diff = (overlap - bench_weights).abs().sum()
+    bench_only_weight = max(1 - bench_weights.sum(), 0)
+    active_share = 0.5 * (diff + bench_only_weight)
+    active_share = min(active_share, 1.0)
+
     # Benchmark equivalents
     b_excess = aligned["bench"] - rf_d
     b_sharpe = b_excess.mean() / aligned["bench"].std() * np.sqrt(ann) if aligned["bench"].std() > 0 else 0
@@ -198,6 +229,7 @@ def compute_all(end_date=None):
         "R²": f"{r2:.3f}", "Max DD": f"{dd_port.min():.2%}",
         "Downside Vol": f"{down_vol:.2%}",
         "Up Capture": f"{up_cap:.1f}%", "Down Capture": f"{dn_cap:.1f}%",
+        "Active Share": f"{active_share:.1%}",
     }
     bench_risk = {
         "Ann. Return": f"{b_ann_ret:.2%}", "Ann. Vol": f"{b_ann_vol:.2%}",
@@ -209,6 +241,7 @@ def compute_all(end_date=None):
         "R²": "1.000", "Max DD": f"{dd_bench.min():.2%}",
         "Downside Vol": f"{b_down_vol:.2%}",
         "Up Capture": "100.0%", "Down Capture": "100.0%",
+        "Active Share": "0.0%",
     }
     risk_df = pd.DataFrame({
         "Metric": list(risk.keys()),
