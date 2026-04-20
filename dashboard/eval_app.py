@@ -37,7 +37,7 @@ EVAL_END = date(2026, 4, 20)
 # ── Dash app (separate instance, different port) ─────────────────
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.DARKLY],
+    external_stylesheets=[dbc.themes.FLATLY],
     title="FINN3021 — Evaluation Period Report",
     suppress_callback_exceptions=True,
 )
@@ -73,7 +73,7 @@ def build_layout():
             f"Evaluation period: {EVAL_START} → {EVAL_END}  ·  "
             "Data: yfinance · Not investment advice",
             className="text-muted text-center", style={"fontSize": "0.7rem"}),
-    ], fluid=True, style={"backgroundColor": "#0f0f23", "minHeight": "100vh",
+    ], fluid=True, style={"backgroundColor": "white", "minHeight": "100vh",
                            "padding": "20px 30px"})
 
 

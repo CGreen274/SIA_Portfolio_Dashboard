@@ -376,7 +376,7 @@ def compute_all(end_date=None):
     return result
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.DARKLY],
+    external_stylesheets=[dbc.themes.FLATLY],
     title="FINN3021 Portfolio Dashboard",
     suppress_callback_exceptions=True,
 )
@@ -415,27 +415,27 @@ def _build_ff5_section(d):
         data=ff_df.to_dict("records"),
         columns=[{"name": c, "id": c} for c in ff_df.columns],
         style_header={
-            "backgroundColor": "#16213e", "color": "#e0e0e0",
+            "backgroundColor": "#f0f0f0", "color": "#212529",
             "fontWeight": "bold", "fontSize": "0.82rem",
-            "borderBottom": "2px solid #7c4dff",
+            "borderBottom": "2px solid #495057",
         },
         style_cell={
-            "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+            "backgroundColor": "white", "color": "#212529",
             "fontSize": "0.82rem", "padding": "6px 14px",
-            "border": "1px solid #2a2a4a",
+            "border": "1px solid #dee2e6",
         },
         style_data_conditional=[
             {"if": {"filter_query": '{Sig.} contains "**"'},
-             "fontWeight": "bold", "color": "#00e676"},
+             "fontWeight": "bold", "color": "#198754"},
             {"if": {"filter_query": '{Coefficient} < 0', "column_id": "Coefficient"},
-             "color": "#ff5252"},
+             "color": "#dc3545"},
         ],
     )
 
     # Bar chart of factor loadings (exclude alpha)
     load_factors = [f for f in factors if f != "const"]
     coeffs = [ff5["params"].get(f, 0) for f in load_factors]
-    colours = ["#00e676" if c >= 0 else "#ff5252" for c in coeffs]
+    colours = ["#198754" if c >= 0 else "#dc3545" for c in coeffs]
     bar_fig = go.Figure(go.Bar(
         x=[nice.get(f, f) for f in load_factors],
         y=coeffs,
@@ -446,10 +446,10 @@ def _build_ff5_section(d):
     bar_fig.update_layout(
         title=f"FF5 Factor Loadings  ·  R² = {ff5['rsquared']:.3f}  ·  "
               f"α (ann.) = {ff5['alpha_ann']:.2%}  ·  n = {ff5['nobs']}",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", yaxis_title="Loading (β)",
-        height=380, margin=dict(l=50, r=20, t=60, b=80),
-        xaxis=dict(tickangle=-20),
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", yaxis_title="Loading (β)",
+        height=420, margin=dict(l=50, r=20, t=60, b=140),
+        xaxis=dict(tickangle=-30, tickfont=dict(size=10)),
     )
 
     proxy_note = html.P(
@@ -462,7 +462,7 @@ def _build_ff5_section(d):
 
     return html.Div([
         html.H5("Fama-French 5-Factor Decomposition",
-                 className="text-light mt-4 mb-2"),
+                 className="text-dark mt-4 mb-2"),
         dbc.Row([
             dbc.Col(ff_table, md=5),
             dbc.Col(dcc.Graph(figure=bar_fig, config=CHART_CONFIG), md=7),
@@ -480,21 +480,21 @@ def _build_fx_section(d):
     fx_fig = go.Figure()
     fx_fig.add_trace(go.Bar(
         x=fx["name"], y=fx["local_ret"], name="Local Return %",
-        marker_color="#42a5f5", opacity=0.85,
+        marker_color="#0d6efd", opacity=0.85,
     ))
     fx_fig.add_trace(go.Bar(
         x=fx["name"], y=fx["fx_ret"], name="FX Effect %",
-        marker_color="#ffa726", opacity=0.85,
+        marker_color="#fd7e14", opacity=0.85,
     ))
     fx_fig.add_trace(go.Scatter(
         x=fx["name"], y=fx["usd_ret"], name="USD Return %",
-        mode="markers+lines", line=dict(color="#00e676", width=2),
-        marker=dict(size=7, color="#00e676"),
+        mode="markers+lines", line=dict(color="#198754", width=2),
+        marker=dict(size=7, color="#198754"),
     ))
     fx_fig.update_layout(
         title="Return Decomposition — Local Currency vs FX Effect",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", barmode="relative",
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", barmode="relative",
         yaxis_title="Return (%)", height=400,
         margin=dict(l=50, r=20, t=60, b=80),
         legend=dict(orientation="h", y=1.12),
@@ -513,24 +513,24 @@ def _build_fx_section(d):
         ],
         sort_action="native",
         style_header={
-            "backgroundColor": "#16213e", "color": "#e0e0e0",
+            "backgroundColor": "#f0f0f0", "color": "#212529",
             "fontWeight": "bold", "fontSize": "0.8rem",
-            "borderBottom": "2px solid #ffa726",
+            "borderBottom": "2px solid #495057",
         },
         style_cell={
-            "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+            "backgroundColor": "white", "color": "#212529",
             "fontSize": "0.8rem", "padding": "6px 12px",
-            "border": "1px solid #2a2a4a",
+            "border": "1px solid #dee2e6",
         },
         style_data_conditional=[
             {"if": {"filter_query": "{fx_ret} > 0", "column_id": "fx_ret"},
-             "color": "#00e676"},
+             "color": "#198754"},
             {"if": {"filter_query": "{fx_ret} < 0", "column_id": "fx_ret"},
-             "color": "#ff5252"},
+             "color": "#dc3545"},
             {"if": {"filter_query": "{usd_ret} > 0", "column_id": "usd_ret"},
-             "color": "#00e676", "fontWeight": "bold"},
+             "color": "#198754", "fontWeight": "bold"},
             {"if": {"filter_query": "{usd_ret} < 0", "column_id": "usd_ret"},
-             "color": "#ff5252", "fontWeight": "bold"},
+             "color": "#dc3545", "fontWeight": "bold"},
         ],
     )
 
@@ -557,7 +557,7 @@ def kpi_card(title, value, sub=None, color="primary"):
             *body,
         ]),
         className=f"border-{color}",
-        style={"borderLeft": "4px solid", "backgroundColor": "#1a1a2e"},
+        style={"borderLeft": "4px solid", "backgroundColor": "white"},
     )
 
 
@@ -589,7 +589,7 @@ def build_layout():
         html.Hr(),
         html.P("Data: yfinance · Screen: WRDS Compustat Global · Not investment advice",
                className="text-muted text-center", style={"fontSize": "0.7rem"}),
-    ], fluid=True, style={"backgroundColor": "#0f0f23", "minHeight": "100vh",
+    ], fluid=True, style={"backgroundColor": "white", "minHeight": "100vh",
                            "padding": "20px 30px"})
 
 
@@ -645,24 +645,24 @@ def build_dashboard_content(d):
     perf_fig = go.Figure()
     perf_fig.add_trace(go.Scatter(
         x=d["port_return"].index, y=d["port_return"] * 100,
-        name="Portfolio", line=dict(color="#00d4ff", width=2.5),
+        name="Portfolio", line=dict(color="#0d6efd", width=2.5),
     ))
     perf_fig.add_trace(go.Scatter(
         x=d["bench_return"].index, y=d["bench_return"] * 100,
         name=f"Benchmark ({BENCHMARK})",
-        line=dict(color="#ff6b6b", width=2, dash="dash"),
+        line=dict(color="#dc3545", width=2, dash="dash"),
     ))
     perf_fig.add_trace(go.Scatter(
         x=d["port_return"].index,
         y=(d["port_return"] - d["bench_return"]) * 100,
         name="Active return", fill="tozeroy",
-        line=dict(color="rgba(0,180,100,0.4)", width=0),
-        fillcolor="rgba(0,180,100,0.15)",
+        line=dict(color="rgba(40,167,69,0.4)", width=0),
+        fillcolor="rgba(40,167,69,0.12)",
     ))
     perf_fig.update_layout(
         title="Cumulative Return — Portfolio vs Benchmark",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", yaxis_title="Return (%)",
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", yaxis_title="Return (%)",
         legend=dict(orientation="h", y=1.12),
         height=420, margin=dict(l=50, r=20, t=60, b=40),
         hovermode="x unified",
@@ -673,17 +673,17 @@ def build_dashboard_content(d):
     dd_fig.add_trace(go.Scatter(
         x=d["dd_port"].index, y=d["dd_port"] * 100,
         name="Portfolio", fill="tozeroy",
-        line=dict(color="#ff6b6b", width=1.5),
-        fillcolor="rgba(255,50,50,0.3)",
+        line=dict(color="#dc3545", width=1.5),
+        fillcolor="rgba(220,53,69,0.2)",
     ))
     dd_fig.add_trace(go.Scatter(
         x=d["dd_bench"].index, y=d["dd_bench"] * 100,
-        name="Benchmark", line=dict(color="#ffa500", width=1, dash="dot"),
+        name="Benchmark", line=dict(color="#fd7e14", width=1, dash="dot"),
     ))
     dd_fig.update_layout(
         title="Drawdown from Peak",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", yaxis_title="Drawdown (%)",
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", yaxis_title="Drawdown (%)",
         legend=dict(orientation="h", y=1.12),
         height=300, margin=dict(l=50, r=20, t=60, b=40),
         hovermode="x unified",
@@ -697,8 +697,8 @@ def build_dashboard_content(d):
         hole=0.45, color_discrete_sequence=px.colors.qualitative.Set2,
     )
     ctry_fig.update_layout(
-        title="Country Exposure", template="plotly_dark",
-        paper_bgcolor="#0f0f23", height=370,
+        title="Country Exposure", template="plotly_white",
+        paper_bgcolor="white", height=370,
         margin=dict(l=10, r=10, t=50, b=10),
         legend=dict(font=dict(size=10)),
     )
@@ -707,8 +707,8 @@ def build_dashboard_content(d):
         hole=0.45, color_discrete_sequence=px.colors.qualitative.Pastel,
     )
     sec_fig.update_layout(
-        title="Sector Exposure", template="plotly_dark",
-        paper_bgcolor="#0f0f23", height=370,
+        title="Sector Exposure", template="plotly_white",
+        paper_bgcolor="white", height=370,
         margin=dict(l=10, r=10, t=50, b=10),
         legend=dict(font=dict(size=10)),
     )
@@ -732,26 +732,26 @@ def build_dashboard_content(d):
         sort_action="native",
         style_table={"overflowX": "auto"},
         style_header={
-            "backgroundColor": "#16213e", "color": "#e0e0e0",
+            "backgroundColor": "#f0f0f0", "color": "#212529",
             "fontWeight": "bold", "fontSize": "0.8rem",
-            "borderBottom": "2px solid #00d4ff",
+            "borderBottom": "2px solid #0d6efd",
         },
         style_cell={
-            "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+            "backgroundColor": "white", "color": "#212529",
             "fontSize": "0.8rem", "padding": "8px 12px",
-            "border": "1px solid #2a2a4a",
+            "border": "1px solid #dee2e6",
         },
         style_data_conditional=[
             {"if": {"filter_query": "{Return %} > 0", "column_id": "Return %"},
-             "color": "#00e676", "fontWeight": "bold"},
+             "color": "#198754", "fontWeight": "bold"},
             {"if": {"filter_query": "{Return %} < 0", "column_id": "Return %"},
-             "color": "#ff5252", "fontWeight": "bold"},
+             "color": "#dc3545", "fontWeight": "bold"},
             {"if": {"filter_query": "{P&L ($)} > 0", "column_id": "P&L ($)"},
-             "color": "#00e676"},
+             "color": "#198754"},
             {"if": {"filter_query": "{P&L ($)} < 0", "column_id": "P&L ($)"},
-             "color": "#ff5252"},
-            {"if": {"state": "active"}, "backgroundColor": "#212145",
-             "border": "1px solid #00d4ff"},
+             "color": "#dc3545"},
+            {"if": {"state": "active"}, "backgroundColor": "#e9ecef",
+             "border": "1px solid #0d6efd"},
         ],
         page_size=25,
     )
@@ -772,8 +772,8 @@ def build_dashboard_content(d):
     ))
     corr_fig.update_layout(
         title=f"Pairwise Correlation  ·  avg = {corr.where(~np.eye(len(corr), dtype=bool)).stack().mean():.3f}",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", height=550,
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", height=550,
         margin=dict(l=120, r=20, t=60, b=120),
         xaxis=dict(tickangle=45, tickfont=dict(size=9)),
         yaxis=dict(tickfont=dict(size=9)),
@@ -785,14 +785,14 @@ def build_dashboard_content(d):
     capm_fig.add_trace(go.Scatter(
         x=al["bench"] * 100, y=al["port"] * 100,
         mode="markers", name="Daily returns",
-        marker=dict(color="#00d4ff", size=6, opacity=0.5),
+        marker=dict(color="#0d6efd", size=6, opacity=0.5),
     ))
     x_line = np.linspace(al["bench"].min(), al["bench"].max(), 100)
     y_line = d["reg"].intercept + d["reg"].slope * x_line
     capm_fig.add_trace(go.Scatter(
         x=x_line * 100, y=y_line * 100,
         mode="lines", name=f"α={d['alpha_ann']:.2%} β={d['beta']:.3f} R²={d['r2']:.3f}",
-        line=dict(color="#ff6b6b", width=2),
+        line=dict(color="#dc3545", width=2),
     ))
     lim = max(abs(al["bench"].min()), abs(al["bench"].max())) * 100
     capm_fig.add_trace(go.Scatter(
@@ -801,8 +801,8 @@ def build_dashboard_content(d):
     ))
     capm_fig.update_layout(
         title="CAPM Regression — Portfolio vs Benchmark",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e",
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa",
         xaxis_title=f"Benchmark daily return (%) — {BENCHMARK}",
         yaxis_title="Portfolio daily return (%)",
         height=420, margin=dict(l=50, r=20, t=60, b=50),
@@ -814,14 +814,14 @@ def build_dashboard_content(d):
         data=d["risk_df"].to_dict("records"),
         columns=[{"name": c, "id": c} for c in d["risk_df"].columns],
         style_header={
-            "backgroundColor": "#16213e", "color": "#e0e0e0",
+            "backgroundColor": "#f0f0f0", "color": "#212529",
             "fontWeight": "bold", "fontSize": "0.82rem",
-            "borderBottom": "2px solid #ffa500",
+            "borderBottom": "2px solid #495057",
         },
         style_cell={
-            "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+            "backgroundColor": "white", "color": "#212529",
             "fontSize": "0.82rem", "padding": "6px 14px",
-            "border": "1px solid #2a2a4a",
+            "border": "1px solid #dee2e6",
         },
     )
 
@@ -914,23 +914,23 @@ def build_dashboard_content(d):
             columns=[{"name": nice.get(c, c), "id": c} for c in show_cols],
             sort_action="native",
             style_header={
-                "backgroundColor": "#16213e", "color": "#e0e0e0",
+                "backgroundColor": "#f0f0f0", "color": "#212529",
                 "fontWeight": "bold", "fontSize": "0.8rem",
-                "borderBottom": "2px solid #9c27b0",
+                "borderBottom": "2px solid #6c757d",
             },
             style_cell={
-                "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+                "backgroundColor": "white", "color": "#212529",
                 "fontSize": "0.8rem", "padding": "6px 12px",
-                "border": "1px solid #2a2a4a",
+                "border": "1px solid #dee2e6",
             },
             style_data_conditional=[
                 {"if": {"filter_query": '{name} = "AVERAGE"'},
-                 "backgroundColor": "#16213e", "fontWeight": "bold",
-                 "borderTop": "2px solid #9c27b0"},
+                 "backgroundColor": "#f0f0f0", "fontWeight": "bold",
+                 "borderTop": "2px solid #6c757d"},
             ],
         )
         fund_section = html.Div([
-            html.H5("Screen Fundamentals", className="text-light mt-4 mb-2"),
+            html.H5("Screen Fundamentals", className="text-dark mt-4 mb-2"),
             fund_table,
         ])
 
@@ -947,8 +947,8 @@ def build_dashboard_content(d):
         ))
     stock_fig.update_layout(
         title="Individual Stock Returns Since Inception",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", yaxis_title="Return (%)",
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", yaxis_title="Return (%)",
         height=450, margin=dict(l=50, r=20, t=60, b=40),
         legend=dict(font=dict(size=9)),
         hovermode="x unified",
@@ -1070,18 +1070,18 @@ def build_dashboard_content(d):
     # Actual period
     reinvest_fig.add_trace(go.Scatter(
         x=price_nav.index, y=price_nav,
-        name="Price-only NAV", line=dict(color="#ff6b6b", width=2),
+        name="Price-only NAV", line=dict(color="#dc3545", width=2),
     ))
     reinvest_fig.add_trace(go.Scatter(
         x=tr_nav.index, y=tr_nav,
         name="Total return NAV (TSY reinvested)",
-        line=dict(color="#00e676", width=2.5),
-        fill="tonexty", fillcolor="rgba(0,230,118,0.1)",
+        line=dict(color="#198754", width=2.5),
+        fill="tonexty", fillcolor="rgba(25,135,84,0.1)",
     ))
     reinvest_fig.update_layout(
         title=f"Total Shareholder Yield Impact — Actual Period  (TSY {port_total_sh_yield:.1f}%)",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", yaxis_title="NAV ($)",
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", yaxis_title="NAV ($)",
         height=350, margin=dict(l=60, r=20, t=60, b=40),
         legend=dict(orientation="h", y=1.12),
         hovermode="x unified",
@@ -1093,18 +1093,18 @@ def build_dashboard_content(d):
     proj_fig.add_trace(go.Bar(
         x=proj_labels, y=price_only_proj,
         name=f"Price only ({price_ann:.1%} p.a.)",
-        marker_color="#ff6b6b", opacity=0.7,
+        marker_color="#dc3545", opacity=0.7,
     ))
     proj_fig.add_trace(go.Bar(
         x=proj_labels, y=total_ret_proj,
         name=f"With TSY reinvested ({total_ret_with_div:.1%} p.a.)",
-        marker_color="#00e676", opacity=0.7,
+        marker_color="#198754", opacity=0.7,
     ))
     yr10_diff = total_ret_proj[-1] - price_only_proj[-1]
     proj_fig.update_layout(
         title=f"10-Year Projection — Total Shareholder Yield Adds ${yr10_diff:,.0f}",
-        template="plotly_dark", paper_bgcolor="#0f0f23",
-        plot_bgcolor="#1a1a2e", yaxis_title="NAV ($)",
+        template="plotly_white", paper_bgcolor="white",
+        plot_bgcolor="#f8f9fa", yaxis_title="NAV ($)",
         barmode="group", height=350,
         margin=dict(l=60, r=20, t=60, b=40),
         legend=dict(orientation="h", y=1.12),
@@ -1116,30 +1116,30 @@ def build_dashboard_content(d):
         columns=[{"name": c, "id": c} for c in div_df.columns],
         sort_action="native",
         style_header={
-            "backgroundColor": "#16213e", "color": "#e0e0e0",
+            "backgroundColor": "#f0f0f0", "color": "#212529",
             "fontWeight": "bold", "fontSize": "0.8rem",
-            "borderBottom": "2px solid #4caf50",
+            "borderBottom": "2px solid #198754",
         },
         style_cell={
-            "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+            "backgroundColor": "white", "color": "#212529",
             "fontSize": "0.8rem", "padding": "6px 12px",
-            "border": "1px solid #2a2a4a",
+            "border": "1px solid #dee2e6",
         },
         style_data_conditional=[
             {"if": {"filter_query": "{Forward Yield %} >= 5", "column_id": "Forward Yield %"},
-             "color": "#00e676", "fontWeight": "bold"},
+             "color": "#198754", "fontWeight": "bold"},
             {"if": {"filter_query": "{Buyback Yield %} > 0", "column_id": "Buyback Yield %"},
-             "color": "#00e676"},
+             "color": "#198754"},
             {"if": {"filter_query": "{Buyback Yield %} < 0", "column_id": "Buyback Yield %"},
              "color": "#ff6b6b"},
             {"if": {"filter_query": "{Total SH Yield %} >= 5", "column_id": "Total SH Yield %"},
-             "color": "#00e676", "fontWeight": "bold"},
+             "color": "#198754", "fontWeight": "bold"},
         ],
     )
 
     div_impact = dbc.Card(
         dbc.CardBody([
-            html.H6("Total Shareholder Yield", className="text-light mb-3"),
+            html.H6("Total Shareholder Yield", className="text-dark mb-3"),
             dbc.Row([
                 dbc.Col([
                     html.P("Wtd Div Yield", className="text-muted mb-0",
@@ -1174,12 +1174,12 @@ def build_dashboard_content(d):
                 ], md=2),
             ]),
         ]),
-        style={"backgroundColor": "#1a1a2e", "border": "1px solid #4caf50"},
+        style={"backgroundColor": "white", "border": "1px solid #4caf50"},
         className="mb-3 mt-2",
     )
 
     div_section = html.Div([
-        html.H5("Total Shareholder Yield — Dividends + Buybacks", className="text-light mt-4 mb-2"),
+        html.H5("Total Shareholder Yield — Dividends + Buybacks", className="text-dark mt-4 mb-2"),
         div_impact,
         div_table,
         dbc.Row([
@@ -1198,19 +1198,19 @@ def build_dashboard_content(d):
             columns=[{"name": c, "id": c} for c in tlog.columns],
             sort_action="native",
             style_header={
-                "backgroundColor": "#16213e", "color": "#e0e0e0",
+                "backgroundColor": "#f0f0f0", "color": "#212529",
                 "fontWeight": "bold", "fontSize": "0.78rem",
-                "borderBottom": "2px solid #00bcd4",
+                "borderBottom": "2px solid #0d6efd",
             },
             style_cell={
-                "backgroundColor": "#1a1a2e", "color": "#e0e0e0",
+                "backgroundColor": "white", "color": "#212529",
                 "fontSize": "0.78rem", "padding": "5px 10px",
-                "border": "1px solid #2a2a4a",
+                "border": "1px solid #dee2e6",
             },
             page_size=10,
         )
         trade_section = html.Div([
-            html.H5("Trade Log", className="text-light mt-4 mb-2"),
+            html.H5("Trade Log", className="text-dark mt-4 mb-2"),
             trade_table,
         ])
 
@@ -1233,11 +1233,11 @@ def build_dashboard_content(d):
         ], className="mb-3"),
 
         # Positions table
-        html.H5("Holdings", className="text-light mb-2"),
+        html.H5("Holdings", className="text-dark mb-2"),
         pos_table,
 
         # ── FX / Local return attribution ────────────────────
-        html.H5("Return Attribution — Local vs Currency", className="text-light mt-4 mb-2"),
+        html.H5("Return Attribution — Local vs Currency", className="text-dark mt-4 mb-2"),
         _build_fx_section(d),
 
         # Individual stock chart
@@ -1248,7 +1248,7 @@ def build_dashboard_content(d):
         # Two-column: risk metrics | CAPM
         dbc.Row([
             dbc.Col([
-                html.H5("Risk Metrics", className="text-light mb-2"),
+                html.H5("Risk Metrics", className="text-dark mb-2"),
                 risk_table,
             ], md=5),
             dbc.Col(
