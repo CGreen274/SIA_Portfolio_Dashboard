@@ -11,6 +11,8 @@ page load.  Re-run the notebook → refresh the browser to pick up changes.
 
 import os
 import pathlib
+import time
+import traceback
 from datetime import date
 
 import dash
@@ -19,7 +21,12 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
 import yfinance as yf
+
+# ── Global Plotly font ────────────────────────────────────────────
+_FONT_FAMILY = "Aptos, Calibri, 'Segoe UI', Helvetica, Arial, sans-serif"
+pio.templates["plotly_white"].layout.font = dict(family=_FONT_FAMILY)
 from dash import Input, Output, callback, dash_table, dcc, html
 from scipy import stats as sp_stats
 import statsmodels.api as sm
@@ -160,6 +167,7 @@ def compute_all(end_date=None):
     ir = active.mean() / active.std() * np.sqrt(ann) if active.std() > 0 else 0
     cov_m = np.cov(aligned["port"], aligned["bench"])
     beta = cov_m[0, 1] / cov_m[1, 1] if cov_m[1, 1] > 0 else 0
+    jensens_alpha = p_ann_ret - (RISK_FREE_ANNUAL + beta * (b_ann_ret - RISK_FREE_ANNUAL))
     treynor = (p_ann_ret - RISK_FREE_ANNUAL) / beta if beta != 0 else 0
     reg = sp_stats.linregress(aligned["bench"], aligned["port"])
     alpha_ann = reg.intercept * ann
@@ -227,6 +235,7 @@ def compute_all(end_date=None):
         "Treynor": f"{treynor:.4f}", "Calmar": f"{calmar:.2f}",
         "Info Ratio": f"{ir:.2f}", "Tracking Error": f"{te:.2%}",
         "Beta": f"{beta:.3f}", "Alpha (ann)": f"{alpha_ann:.2%}",
+        "Jensen's α": f"{jensens_alpha:.2%}",
         "R²": f"{r2:.3f}", "Max DD": f"{dd_port.min():.2%}",
         "Downside Vol": f"{down_vol:.2%}",
         "Up Capture": f"{up_cap:.1f}%", "Down Capture": f"{dn_cap:.1f}%",
@@ -239,6 +248,7 @@ def compute_all(end_date=None):
         "Treynor": f"{b_treynor:.4f}", "Calmar": f"{b_calmar:.2f}",
         "Info Ratio": "—", "Tracking Error": "—",
         "Beta": "1.000", "Alpha (ann)": "0.00%",
+        "Jensen's α": "0.00%",
         "R²": "1.000", "Max DD": f"{dd_bench.min():.2%}",
         "Downside Vol": f"{b_down_vol:.2%}",
         "Up Capture": "100.0%", "Down Capture": "100.0%",
@@ -344,9 +354,11 @@ def compute_all(end_date=None):
             "rsquared_adj": ff5_model.rsquared_adj,
             "alpha_ann": ff5_model.params.get("const", 0) * 252,
             "nobs": int(ff5_model.nobs),
+            "factor_sum": X.sum().to_dict(),   # cumulative factor returns over period
+            "port_excess_cum": float(y.sum()),  # cumulative portfolio excess return
         }
     except Exception:
-        ff5_result = None
+        ff5_result = {"error": traceback.format_exc()}
 
     result = {
         "prices": prices,
@@ -380,17 +392,24 @@ app = dash.Dash(
     title="FINN3021 Portfolio Dashboard",
     suppress_callback_exceptions=True,
 )
+app.index_string = app.index_string.replace(
+    "</head>",
+    "<style>* { font-family: Aptos, Calibri, 'Segoe UI', Helvetica, Arial, sans-serif !important; }</style></head>",
+)
 server = app.server  # expose for gunicorn
 
 
 def _build_ff5_section(d):
     """Build the Fama-French 5-factor regression section."""
     ff5 = d.get("ff5")
-    if ff5 is None:
-        return html.Div(html.P(
-            "FF5 factor data unavailable for this period.",
-            className="text-muted",
-        ))
+    if ff5 is None or "error" in (ff5 or {}):
+        err_msg = (ff5 or {}).get("error", "Unknown error")
+        return html.Div([
+            html.P("FF5 factor data unavailable for this period.", className="text-muted"),
+            html.Pre(err_msg, style={"fontSize": "0.7rem", "color": "#dc3545",
+                                     "whiteSpace": "pre-wrap", "maxHeight": "200px",
+                                     "overflow": "auto"}),
+        ])
 
     factors = ["const", "MKT-RF", "SMB", "HML", "RMW", "CMA"]
     nice = {"const": "Alpha (daily)", "MKT-RF": "Market", "SMB": "Size (Small-Big)",
@@ -442,14 +461,17 @@ def _build_ff5_section(d):
         marker_color=colours,
         text=[f"{c:.3f}" for c in coeffs],
         textposition="outside",
+        textfont=dict(size=12),
     ))
+    y_max = max(abs(c) for c in coeffs) * 1.4
     bar_fig.update_layout(
         title=f"FF5 Factor Loadings  ·  R² = {ff5['rsquared']:.3f}  ·  "
               f"α (ann.) = {ff5['alpha_ann']:.2%}  ·  n = {ff5['nobs']}",
         template="plotly_white", paper_bgcolor="white",
         plot_bgcolor="#f8f9fa", yaxis_title="Loading (β)",
-        height=420, margin=dict(l=50, r=20, t=60, b=140),
+        height=560, margin=dict(l=50, r=20, t=80, b=140),
         xaxis=dict(tickangle=-30, tickfont=dict(size=10)),
+        yaxis=dict(range=[-y_max, y_max]),
     )
 
     proxy_note = html.P(
@@ -460,14 +482,53 @@ def _build_ff5_section(d):
         className="text-muted mt-2", style={"fontSize": "0.72rem"},
     )
 
+    # ── Return attribution breakdown ──────────────────────────
+    load_factor_names = ["MKT-RF", "SMB", "HML", "RMW", "CMA"]
+    factor_sum = ff5.get("factor_sum", {})
+    alpha_contrib = ff5["params"].get("const", 0) * ff5["nobs"]
+    factor_contribs = {
+        f: ff5["params"].get(f, 0) * factor_sum.get(f, 0)
+        for f in load_factor_names
+    }
+    total_explained = alpha_contrib + sum(factor_contribs.values())
+    port_excess = ff5.get("port_excess_cum", total_explained)
+    residual = port_excess - total_explained
+
+    def _sign(v): return f"+{v:.2%}" if v >= 0 else f"{v:.2%}"
+
+    breakdown_rows = [
+        f"| {'Source':<36} | {'Contribution':>12} |",
+        f"| {'-'*36} | {'-'*12} |",
+        f"| {'Alpha (manager skill)':<36} | {_sign(alpha_contrib):>12} |",
+    ]
+    for f in load_factor_names:
+        label = nice.get(f, f)
+        b = ff5["params"].get(f, 0)
+        contrib = factor_contribs[f]
+        breakdown_rows.append(
+            f"| {label + f' (β={b:+.3f})':<36} | {_sign(contrib):>12} |"
+        )
+    breakdown_rows += [
+        f"| {'Residual (ε)':<36} | {_sign(residual):>12} |",
+        f"| {'**Total portfolio excess return**':<36} | **{_sign(port_excess):>10}** |",
+    ]
+    breakdown_md = dcc.Markdown(
+        "**Return Attribution — FF5 Decomposition**  \n"
+        "*Contribution = factor loading × cumulative factor return over evaluation period*\n\n"
+        + "\n".join(breakdown_rows),
+        style={"fontSize": "0.82rem", "marginTop": "12px"},
+    )
+
     return html.Div([
         html.H5("Fama-French 5-Factor Decomposition",
                  className="text-dark mt-4 mb-2"),
-        dbc.Row([
-            dbc.Col(ff_table, md=5),
-            dbc.Col(dcc.Graph(figure=bar_fig, config=CHART_CONFIG), md=7),
-        ]),
-        proxy_note,
+        dcc.Graph(figure=bar_fig, config=CHART_CONFIG),
+        dbc.Accordion([
+            dbc.AccordionItem(
+                html.Div([ff_table, breakdown_md, proxy_note]),
+                title="Regression Coefficients & Return Attribution",
+            ),
+        ], start_collapsed=True, className="mb-2"),
     ])
 
 
@@ -538,7 +599,9 @@ def _build_fx_section(d):
         dbc.Row(dbc.Col(
             dcc.Graph(figure=fx_fig, config=CHART_CONFIG),
         ), className="mb-3"),
-        fx_table,
+        dbc.Accordion([
+            dbc.AccordionItem(fx_table, title="FX Attribution Detail"),
+        ], start_collapsed=True, className="mb-2"),
     ])
 
 
@@ -590,10 +653,24 @@ def build_layout():
         html.P("Data: yfinance · Screen: WRDS Compustat Global · Not investment advice",
                className="text-muted text-center", style={"fontSize": "0.7rem"}),
     ], fluid=True, style={"backgroundColor": "white", "minHeight": "100vh",
-                           "padding": "20px 30px"})
+                           "padding": "20px 30px",
+                           "fontFamily": "Aptos, Calibri, 'Segoe UI', Helvetica, Arial, sans-serif"})
 
 
 app.layout = build_layout
+
+
+_CACHE_TTL = int(os.environ.get("DASHBOARD_CACHE_TTL", 900))  # seconds (15 min)
+_cache: dict = {"content": None, "last_date": None, "ts": 0.0}
+
+
+def _build_cached(force=False):
+    now = time.time()
+    if force or _cache["content"] is None or (now - _cache["ts"]) > _CACHE_TTL:
+        d = compute_all()
+        _cache["content"], _cache["last_date"] = build_dashboard_content(d)
+        _cache["ts"] = now
+    return _cache["content"], _cache["last_date"], int(now - _cache["ts"])
 
 
 @callback(
@@ -601,11 +678,10 @@ app.layout = build_layout
     Output("last-update", "children"),
     Input("refresh-btn", "n_clicks"),
 )
-def refresh_dashboard(_):
-    """Rebuild the entire dashboard from live data."""
-    d = compute_all()
-    content, last_date = build_dashboard_content(d)
-    return content, f"Last refreshed: {last_date}"
+def refresh_dashboard(n_clicks):
+    """Rebuild the dashboard. Refresh-button click bypasses the cache."""
+    content, last_date, age = _build_cached(force=bool(n_clicks))
+    return content, f"Last refreshed: {last_date}  ·  cached {age}s ago"
 
 
 def build_dashboard_content(d):
@@ -930,8 +1006,9 @@ def build_dashboard_content(d):
             ],
         )
         fund_section = html.Div([
-            html.H5("Screen Fundamentals", className="text-dark mt-4 mb-2"),
-            fund_table,
+            dbc.Accordion([
+                dbc.AccordionItem(fund_table, title="Screen Fundamentals"),
+            ], start_collapsed=True, className="mt-4 mb-2"),
         ])
 
     # ── Per-stock sparklines ─────────────────────────────────
@@ -1042,74 +1119,8 @@ def build_dashboard_content(d):
     div_df.drop(columns=["_wt"], inplace=True)
 
     price_only_ret = total_ret
-    # Annualised total return estimate including total shareholder yield
     days_held = (d["prices"].index[-1] - d["prices"].index[0]).days
-    ann_sh_boost = port_total_sh_yield / 100  # div + buyback yield
     price_ann = (1 + price_only_ret) ** (365 / max(days_held, 1)) - 1
-    total_ret_with_div = price_ann + ann_sh_boost  # includes buybacks
-
-    # ── Dividend reinvestment projection chart ───────────
-    # Project forward from inception: price-only NAV vs total return NAV
-    # using actual price history + daily accrual of total shareholder yield
-    daily_yield = port_total_sh_yield / 100 / 252  # daily TSY accrual
-    price_nav = d["port_value"] / d["port_value"].iloc[0] * NOTIONAL
-    # Build total-return NAV: reinvest dividends daily
-    tr_nav = [NOTIONAL]
-    for i in range(1, len(d["port_value"])):
-        price_change = d["port_value"].iloc[i] / d["port_value"].iloc[i - 1]
-        tr_nav.append(tr_nav[-1] * price_change * (1 + daily_yield))
-    tr_nav = pd.Series(tr_nav, index=d["port_value"].index)
-
-    # Also project 10-year forward from inception
-    proj_years = np.arange(0, HORIZON_YRS + 1)
-    price_only_proj = NOTIONAL * (1 + price_ann) ** proj_years
-    total_ret_proj = NOTIONAL * (1 + total_ret_with_div) ** proj_years
-    proj_labels = [f"Yr {y}" for y in proj_years]
-
-    reinvest_fig = go.Figure()
-    # Actual period
-    reinvest_fig.add_trace(go.Scatter(
-        x=price_nav.index, y=price_nav,
-        name="Price-only NAV", line=dict(color="#dc3545", width=2),
-    ))
-    reinvest_fig.add_trace(go.Scatter(
-        x=tr_nav.index, y=tr_nav,
-        name="Total return NAV (TSY reinvested)",
-        line=dict(color="#198754", width=2.5),
-        fill="tonexty", fillcolor="rgba(25,135,84,0.1)",
-    ))
-    reinvest_fig.update_layout(
-        title=f"Total Shareholder Yield Impact — Actual Period  (TSY {port_total_sh_yield:.1f}%)",
-        template="plotly_white", paper_bgcolor="white",
-        plot_bgcolor="#f8f9fa", yaxis_title="NAV ($)",
-        height=350, margin=dict(l=60, r=20, t=60, b=40),
-        legend=dict(orientation="h", y=1.12),
-        hovermode="x unified",
-        yaxis=dict(tickprefix="$", tickformat=",.0f"),
-    )
-
-    # 10-year projection
-    proj_fig = go.Figure()
-    proj_fig.add_trace(go.Bar(
-        x=proj_labels, y=price_only_proj,
-        name=f"Price only ({price_ann:.1%} p.a.)",
-        marker_color="#dc3545", opacity=0.7,
-    ))
-    proj_fig.add_trace(go.Bar(
-        x=proj_labels, y=total_ret_proj,
-        name=f"With TSY reinvested ({total_ret_with_div:.1%} p.a.)",
-        marker_color="#198754", opacity=0.7,
-    ))
-    yr10_diff = total_ret_proj[-1] - price_only_proj[-1]
-    proj_fig.update_layout(
-        title=f"10-Year Projection — Total Shareholder Yield Adds ${yr10_diff:,.0f}",
-        template="plotly_white", paper_bgcolor="white",
-        plot_bgcolor="#f8f9fa", yaxis_title="NAV ($)",
-        barmode="group", height=350,
-        margin=dict(l=60, r=20, t=60, b=40),
-        legend=dict(orientation="h", y=1.12),
-        yaxis=dict(tickprefix="$", tickformat=",.0f"),
-    )
 
     div_table = dash_table.DataTable(
         data=div_df.to_dict("records"),
@@ -1167,11 +1178,6 @@ def build_dashboard_content(d):
                            style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
                     html.H4(f"{price_ann:.2%}", className="mb-0"),
                 ], md=2),
-                dbc.Col([
-                    html.P("Total Return est. (ann. + TSY)", className="text-muted mb-0",
-                           style={"fontSize": "0.7rem", "textTransform": "uppercase"}),
-                    html.H4(f"{total_ret_with_div:.2%}", className="text-warning mb-0"),
-                ], md=2),
             ]),
         ]),
         style={"backgroundColor": "white", "border": "1px solid #4caf50"},
@@ -1181,11 +1187,9 @@ def build_dashboard_content(d):
     div_section = html.Div([
         html.H5("Total Shareholder Yield — Dividends + Buybacks", className="text-dark mt-4 mb-2"),
         div_impact,
-        div_table,
-        dbc.Row([
-            dbc.Col(dcc.Graph(figure=reinvest_fig, config=CHART_CONFIG), md=6),
-            dbc.Col(dcc.Graph(figure=proj_fig, config=CHART_CONFIG), md=6),
-        ], className="mt-3"),
+        dbc.Accordion([
+            dbc.AccordionItem(div_table, title="Holdings Dividend & Buyback Yields"),
+        ], start_collapsed=True, className="mb-2"),
     ])
 
     # ── Trade log ────────────────────────────────────────────
@@ -1210,8 +1214,9 @@ def build_dashboard_content(d):
             page_size=10,
         )
         trade_section = html.Div([
-            html.H5("Trade Log", className="text-dark mt-4 mb-2"),
-            trade_table,
+            dbc.Accordion([
+                dbc.AccordionItem(trade_table, title="Trade Log"),
+            ], start_collapsed=False, className="mt-4 mb-2"),
         ])
 
     # ━━ Assemble layout ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1233,8 +1238,9 @@ def build_dashboard_content(d):
         ], className="mb-3"),
 
         # Positions table
-        html.H5("Holdings", className="text-dark mb-2"),
-        pos_table,
+        dbc.Accordion([
+            dbc.AccordionItem(pos_table, title="Holdings"),
+        ], start_collapsed=False, className="mb-3"),
 
         # ── FX / Local return attribution ────────────────────
         html.H5("Return Attribution — Local vs Currency", className="text-dark mt-4 mb-2"),
@@ -1248,8 +1254,9 @@ def build_dashboard_content(d):
         # Two-column: risk metrics | CAPM
         dbc.Row([
             dbc.Col([
-                html.H5("Risk Metrics", className="text-dark mb-2"),
-                risk_table,
+                dbc.Accordion([
+                    dbc.AccordionItem(risk_table, title="Risk Metrics"),
+                ], start_collapsed=False, className="mb-2"),
             ], md=5),
             dbc.Col(
                 dcc.Graph(figure=capm_fig, config=CHART_CONFIG), md=7,
