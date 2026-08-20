@@ -11,6 +11,7 @@ page load.  Re-run the notebook → refresh the browser to pick up changes.
 
 import os
 import pathlib
+import threading
 import time
 import traceback
 from datetime import date
@@ -62,6 +63,52 @@ CHART_CONFIG = {
     "modeBarButtonsToRemove": ["select2d", "lasso2d", "autoScale2d"],
 }
 
+# ── Ticker aliases (corporate actions since inception) ────────────
+# The snapshot CSV records the symbol a holding was BOUGHT under. When a company
+# is renamed or absorbed, that symbol stops resolving and yfinance returns a
+# silent all-NaN column rather than an error.
+#
+# ODPV3.SA (Odontoprev) → SAUD3.SA (Bradsaúde S.A.). Verified 20 Aug 2026: the
+# snapshot/SAUD3 price ratio is 1.0055 at inception AND at the 20 Apr snapshot
+# date — constant, so there is no share-exchange ratio to apply (that would show
+# as a clean multiple). The residual 0.55% is dividend re-adjustment in the
+# back-history. Share count therefore carries over 1:1, untouched.
+#
+# Prices are downloaded under the live symbol and renamed back to the portfolio's
+# symbol, so shares, cost basis and every downstream join keep working unchanged.
+TICKER_ALIASES = {
+    "ODPV3.SA": "SAUD3.SA",
+}
+
+
+# ── yfinance .info memo ───────────────────────────────────────────
+# The fundamentals table and the dividends table each loop over all 21 holdings
+# calling yf.Ticker(t).info — the identical network round-trip, twice per
+# rebuild, plus a slow 404 retry for any delisted symbol. One shared cache halves
+# the cold build and makes background refreshes cheap. Company-level info (market
+# cap, currency, payout ratio) changes far too slowly to justify re-fetching it
+# within a single hour.
+_INFO_TTL = int(os.environ.get("DASHBOARD_INFO_TTL", 3600))
+_info_cache: dict = {}
+_info_lock = threading.Lock()
+
+
+def _ticker_info(tk: str) -> dict:
+    """yf.Ticker(tk).info, memoised with a TTL. Never raises."""
+    now = time.time()
+    with _info_lock:
+        hit = _info_cache.get(tk)
+        if hit and (now - hit[0]) < _INFO_TTL:
+            return hit[1]
+    try:
+        info = yf.Ticker(tk).info or {}
+    except Exception:
+        info = {}
+    with _info_lock:
+        _info_cache[tk] = (now, info)
+    return info
+
+
 # ── Load data from notebook CSVs ─────────────────────────────────
 
 def load_snapshot():
@@ -100,20 +147,35 @@ def load_fundamentals():
 
 
 def pull_live_prices(tickers, end_date=None):
-    """Pull adjusted close prices from yfinance since inception."""
+    """Pull adjusted close prices from yfinance since inception.
+
+    Returns (prices, dead) where `dead` lists tickers yfinance returned nothing
+    for. Yahoo silently hands back an all-NaN column for a delisted or dropped
+    symbol rather than raising, so a caller that does not check ends up with a
+    column of NaN masquerading as data — which is how one dead ticker used to
+    wipe out the whole correlation matrix.
+    """
     start = (pd.Timestamp(INCEPTION) - pd.Timedelta(days=5)).strftime("%Y-%m-%d")
     kw = dict(start=start, auto_adjust=True, progress=False)
     if end_date:
         kw["end"] = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    raw = yf.download(tickers, **kw)
+    # Download under the current live symbol, then rename back to the symbol the
+    # portfolio holds, so callers never have to know a rename happened.
+    fetch = [TICKER_ALIASES.get(t, t) for t in tickers]
+    back = {TICKER_ALIASES.get(t, t): t for t in tickers}
+    raw = yf.download(fetch, **kw)
     if isinstance(raw.columns, pd.MultiIndex):
         prices = raw["Close"].copy()
     else:
         prices = raw[["Close"]].copy()
-        prices.columns = tickers
+        prices.columns = fetch
+    prices = prices.rename(columns=back)
+    # A symbol yfinance drops entirely is absent from the frame, not just NaN.
+    prices = prices.reindex(columns=list(tickers))
     prices = prices.ffill()
     prices = prices[prices.index >= pd.Timestamp(INCEPTION)]
-    return prices
+    dead = [t for t in prices.columns if prices[t].isna().all()]
+    return prices, dead
 
 
 def compute_all(end_date=None):
@@ -121,7 +183,22 @@ def compute_all(end_date=None):
     snap = load_snapshot()
     eq_tickers = snap["ticker"].tolist()
     all_tickers = eq_tickers + [BENCHMARK]
-    prices = pull_live_prices(all_tickers, end_date=end_date)
+    prices, dead = pull_live_prices(all_tickers, end_date=end_date)
+
+    # A holding Yahoo no longer covers (Odontoprev/ODPV3.SA, delisted from their
+    # feed) must not silently vanish: dropping it understates portfolio value and
+    # every weight derived from it. Carry it at the last price the snapshot
+    # recorded, and flag it so the UI can say so rather than implying it is live.
+    stale = [t for t in dead if t in eq_tickers]
+    if stale:
+        last_known = snap.set_index("ticker")["current_px"]
+        for t in stale:
+            px = last_known.get(t)
+            if pd.notna(px):
+                prices[t] = float(px)
+    # The benchmark going dark is not recoverable — every relative metric needs it.
+    if BENCHMARK in dead:
+        raise RuntimeError(f"benchmark {BENCHMARK} returned no price data")
 
     # Shares & cost from snapshot
     positions = snap.copy()
@@ -201,16 +278,29 @@ def compute_all(end_date=None):
     }
     port_weights = pos_pnl.set_index("ticker")["weight_now"] / 100
     bench_weights = pd.Series(0.0, index=eq_tickers)
+    # market_caps_live.csv is produced by scripts/fetch_market_caps.py and holds
+    # mcap_usd for every holding. Reading it replaces 21 sequential
+    # yf.Ticker().info round-trips (~8 s of dead time on EVERY cold load) with a
+    # single file read. Market caps move far too slowly to be worth 8 s a page —
+    # refresh the file by re-running that script. Any ticker missing from the
+    # file still falls back to a live lookup, so nothing is lost.
+    cached_mcaps = {}
+    try:
+        _mc = pd.read_csv(DATA / "market_caps_live.csv")
+        cached_mcaps = dict(zip(_mc["ticker"], _mc["mcap_usd"]))
+    except Exception:
+        pass
     for tk in eq_tickers:
-        try:
-            info = yf.Ticker(tk).info
-            mc = info.get("marketCap", 0) or 0
-            ccy = info.get("currency", "USD")
-            fx = _CCY_TO_USD.get(ccy, 1.0)
-            mc_usd = mc * fx
-            bench_weights[tk] = mc_usd / ACWI_EXUS_MCAP
-        except Exception:
-            pass
+        mc_usd = cached_mcaps.get(tk)
+        if mc_usd is None or pd.isna(mc_usd):
+            try:
+                info = _ticker_info(tk)
+                mc = info.get("marketCap", 0) or 0
+                fx = _CCY_TO_USD.get(info.get("currency", "USD"), 1.0)
+                mc_usd = mc * fx
+            except Exception:
+                mc_usd = 0.0
+        bench_weights[tk] = float(mc_usd or 0.0) / ACWI_EXUS_MCAP
     bench_weights = bench_weights.clip(upper=0.05)
     overlap = port_weights.reindex(eq_tickers).fillna(0)
     diff = (overlap - bench_weights).abs().sum()
@@ -260,11 +350,21 @@ def compute_all(end_date=None):
         "Benchmark": list(bench_risk.values()),
     })
 
-    # Correlation
-    eq_dr = prices[eq_tickers].pct_change().dropna()
+    # ── Correlation ──────────────────────────────────────────
+    # `.dropna()` defaults to how="any", so a single all-NaN column (one dead
+    # ticker) deleted EVERY row and left an empty frame — corr() then returned
+    # all-NaN and the heatmap rendered blank. Three changes:
+    #   · drop dead/stale tickers by column, not by row
+    #   · drop rows only when the whole row is empty (a holiday in one market
+    #     should not discard that day for the other twenty names)
+    #   · correlate pairwise with a min_periods floor, so a partial gap costs
+    #     one cell instead of the matrix
+    corr_tickers = [t for t in eq_tickers if t not in stale]
+    eq_dr = prices[corr_tickers].pct_change()
+    eq_dr = eq_dr.dropna(axis=1, how="all").dropna(how="all")
     name_map = positions.set_index("ticker")["name"]
-    eq_dr.columns = [name_map.get(t, t) for t in eq_tickers]
-    corr = eq_dr.corr()
+    eq_dr.columns = [name_map.get(t, t) for t in eq_dr.columns]
+    corr = eq_dr.corr(min_periods=20)
 
     # ── FX attribution ───────────────────────────────────────
     # Map each country code → yfinance FX ticker (CCY→USD rate)
@@ -384,6 +484,7 @@ def compute_all(end_date=None):
         "name_map": name_map,
         "fx_df": fx_df,
         "ff5": ff5_result,
+        "stale_tickers": stale,
     }
     return result
 app = dash.Dash(
@@ -662,15 +763,74 @@ app.layout = build_layout
 
 _CACHE_TTL = int(os.environ.get("DASHBOARD_CACHE_TTL", 900))  # seconds (15 min)
 _cache: dict = {"content": None, "last_date": None, "ts": 0.0}
+_cache_lock = threading.Lock()
+_refreshing = threading.Event()
+
+
+def _rebuild_into_cache():
+    """Recompute and swap into the cache. Safe to call from a worker thread."""
+    d = compute_all()
+    content, last_date = build_dashboard_content(d)
+    with _cache_lock:
+        _cache["content"], _cache["last_date"] = content, last_date
+        _cache["ts"] = time.time()
+
+
+def _refresh_async():
+    """Refresh in the background, at most one at a time."""
+    if _refreshing.is_set():
+        return
+    _refreshing.set()
+
+    def _work():
+        try:
+            _rebuild_into_cache()
+        except Exception:
+            traceback.print_exc()
+        finally:
+            _refreshing.clear()
+
+    threading.Thread(target=_work, daemon=True).start()
 
 
 def _build_cached(force=False):
+    """Serve the cached page immediately; refresh behind it.
+
+    The old version rebuilt inline whenever the cache was cold or stale, so the
+    unlucky visitor who arrived first — or first after the TTL expired — paid the
+    full yfinance round-trip before seeing anything. Now a warm cache is always
+    returned straight away and any refresh happens on a worker thread
+    (stale-while-revalidate). Only a genuinely empty cache blocks, and the
+    startup warm-up below means that is normally over before anyone visits.
+    """
+    with _cache_lock:
+        content, last_date, ts = _cache["content"], _cache["last_date"], _cache["ts"]
     now = time.time()
-    if force or _cache["content"] is None or (now - _cache["ts"]) > _CACHE_TTL:
-        d = compute_all()
-        _cache["content"], _cache["last_date"] = build_dashboard_content(d)
-        _cache["ts"] = now
-    return _cache["content"], _cache["last_date"], int(now - _cache["ts"])
+
+    if content is None:
+        _rebuild_into_cache()                 # nothing to show — must block once
+        with _cache_lock:
+            content, last_date, ts = _cache["content"], _cache["last_date"], _cache["ts"]
+    elif force:
+        _rebuild_into_cache()                 # user asked explicitly — make them wait
+        with _cache_lock:
+            content, last_date, ts = _cache["content"], _cache["last_date"], _cache["ts"]
+        now = time.time()
+    elif (now - ts) > _CACHE_TTL:
+        _refresh_async()                      # hand back stale, update behind it
+
+    return content, last_date, int(now - ts)
+
+
+def _warm_cache_on_start():
+    """Build the page once at boot so the first visitor never waits."""
+    def _work():
+        try:
+            _rebuild_into_cache()
+            print("[dashboard] cache warm — visuals will load instantly")
+        except Exception:
+            traceback.print_exc()
+    threading.Thread(target=_work, daemon=True).start()
 
 
 @callback(
@@ -834,9 +994,14 @@ def build_dashboard_content(d):
 
     # ── Correlation heatmap ──────────────────────────────────
     corr = d["corr"]
-    # Mask upper triangle
-    mask = np.triu(np.ones_like(corr, dtype=bool), k=0)
-    corr_masked = corr.where(~mask)
+    # Guard the title's average: .stack() on an empty or 1x1 frame raises, and a
+    # chart that throws takes the whole callback down rather than degrading.
+    if len(corr) > 1:
+        _off_diag = corr.where(~np.eye(len(corr), dtype=bool)).stack()
+        _avg = _off_diag.mean() if len(_off_diag) else float("nan")
+        _avg_txt = f"avg = {_avg:.3f}" if pd.notna(_avg) else "avg unavailable"
+    else:
+        _avg_txt = "insufficient price history"
 
     corr_fig = go.Figure(data=go.Heatmap(
         z=corr.values, x=corr.columns, y=corr.index,
@@ -847,7 +1012,7 @@ def build_dashboard_content(d):
         hovertemplate="%{x} vs %{y}: %{z:.3f}<extra></extra>",
     ))
     corr_fig.update_layout(
-        title=f"Pairwise Correlation  ·  avg = {corr.where(~np.eye(len(corr), dtype=bool)).stack().mean():.3f}",
+        title=f"Pairwise Correlation  ·  {_avg_txt}",
         template="plotly_white", paper_bgcolor="white",
         plot_bgcolor="#f8f9fa", height=550,
         margin=dict(l=120, r=20, t=60, b=120),
@@ -945,7 +1110,7 @@ def build_dashboard_content(d):
         mcaps, vols = [], []
         for t in fd["ticker"]:
             try:
-                info = yf.Ticker(t).info
+                info = _ticker_info(t)
                 mc = info.get("marketCap")
                 ccy = info.get("currency", "USD")
                 # Convert local-currency market cap to USD
@@ -1082,7 +1247,7 @@ def build_dashboard_content(d):
     for _, h in pos.iterrows():
         try:
             tk = yf.Ticker(h["ticker"])
-            info = tk.info
+            info = _ticker_info(h["ticker"])
             trail_y, fwd_y = _safe_yield(info)
             payout  = _norm_payout(info.get("payoutRatio"))
             bb_y    = _buyback_yield(tk, info)
@@ -1220,7 +1385,28 @@ def build_dashboard_content(d):
         ])
 
     # ━━ Assemble layout ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # A holding priced from the last snapshot rather than a live feed must say so
+    # on the page. Carrying it silently would overstate how current the numbers
+    # are — the position is real, the price simply is not moving any more.
+    _stale = d.get("stale_tickers") or []
+    stale_banner = None
+    if _stale:
+        _nm = d["pos_pnl"].set_index("ticker")["name"]
+        _labels = ", ".join(f"{_nm.get(t, t)} ({t})" for t in _stale)
+        stale_banner = dbc.Alert(
+            [
+                html.Strong("Stale price:  "),
+                f"{_labels} — no live data from the price feed, so the position "
+                f"is carried at its last recorded price. Its P&L and weight are "
+                f"frozen from that date, and it is excluded from the correlation "
+                f"matrix (a constant price has no return series to correlate).",
+            ],
+            color="warning", className="py-2 mb-3",
+            style={"fontSize": "0.85rem"},
+        )
+
     return html.Div([
+        stale_banner,
         kpis,
 
         # Performance + drawdown
@@ -1284,6 +1470,17 @@ def build_dashboard_content(d):
 
 
 # ── Run ───────────────────────────────────────────────────────────
+# Warm the cache only when this module is actually serving the dashboard.
+# export_markdown.py and eval_app.py both `from dashboard.app import …` for the
+# compute helpers; warming on plain import would fire a full yfinance pull as a
+# side effect of running a CLI script. Placed at the bottom of the module so the
+# worker thread cannot reach build_dashboard_content before it is defined.
+_SERVING = (__name__ == "__main__"
+            or os.environ.get("SERVER_SOFTWARE", "").startswith("gunicorn")
+            or os.environ.get("DASHBOARD_WARM") == "1")
+if _SERVING:
+    _warm_cache_on_start()
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8050))
     app.run(debug=False, host="0.0.0.0", port=port)
