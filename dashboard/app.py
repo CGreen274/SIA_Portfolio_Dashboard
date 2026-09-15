@@ -94,18 +94,29 @@ _info_lock = threading.Lock()
 
 
 def _ticker_info(tk: str) -> dict:
-    """yf.Ticker(tk).info, memoised with a TTL. Never raises."""
+    """yf.Ticker(tk).info, memoised with a TTL. Never raises.
+
+    Resolves TICKER_ALIASES first. The price path already downloads under the
+    live symbol (see pull_live_prices); doing the same here keeps the two in
+    step. Without this, a renamed holding 404s on every .info call and every
+    field sourced from it — market cap, volume, payout ratio, buyback yield —
+    comes back empty, which is how Odontoprev went blank across the
+    fundamentals and dividends tables while its price series kept working.
+
+    Cached under the live symbol so aliased and direct lookups share one entry.
+    """
+    live = TICKER_ALIASES.get(tk, tk)
     now = time.time()
     with _info_lock:
-        hit = _info_cache.get(tk)
+        hit = _info_cache.get(live)
         if hit and (now - hit[0]) < _INFO_TTL:
             return hit[1]
     try:
-        info = yf.Ticker(tk).info or {}
+        info = yf.Ticker(live).info or {}
     except Exception:
         info = {}
     with _info_lock:
-        _info_cache[tk] = (now, info)
+        _info_cache[live] = (now, info)
     return info
 
 
@@ -1246,7 +1257,10 @@ def build_dashboard_content(d):
     div_data = []
     for _, h in pos.iterrows():
         try:
-            tk = yf.Ticker(h["ticker"])
+            # Buyback yield reads the cashflow statement off the Ticker object
+            # directly, so it needs the alias applied too — _ticker_info only
+            # resolves it internally for .info.
+            tk = yf.Ticker(TICKER_ALIASES.get(h["ticker"], h["ticker"]))
             info = _ticker_info(h["ticker"])
             trail_y, fwd_y = _safe_yield(info)
             payout  = _norm_payout(info.get("payoutRatio"))
