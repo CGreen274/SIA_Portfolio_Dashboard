@@ -1,0 +1,29 @@
+# Render blueprint — https://render.com/docs/blueprint-spec
+#
+# With this file committed, deploying is "New > Blueprint" against the repo
+# rather than a dozen fields typed into a form, and the config is version
+# controlled alongside the code that depends on it.
+
+services:
+  - type: web
+    name: sia-portfolio-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-dashboard.txt
+    startCommand: gunicorn dashboard.app:server --bind 0.0.0.0:$PORT --timeout 180 --workers 1
+    envVars:
+      # Match the locally tested interpreter. Without this Render picks its own
+      # default, which drifts upward over time and has broken numpy/pandas
+      # wheel resolution before.
+      - key: PYTHON_VERSION
+        value: "3.12.3"
+      # print() from the cache-warm thread is block-buffered when stdout is a
+      # pipe, so progress messages never reach Render's log viewer until the
+      # buffer fills. Unbuffered makes startup diagnosable.
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+# Deliberately one worker: the dashboard cache (_build_cached) lives in process
+# memory, so each extra worker is another full yfinance pull on a cold start and
+# its own divergent copy of the data. One worker also keeps the free tier's
+# 512 MB inside pandas/statsmodels' footprint.

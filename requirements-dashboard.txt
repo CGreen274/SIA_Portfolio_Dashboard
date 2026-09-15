@@ -1,0 +1,19 @@
+# Runtime dependencies for the deployed dashboard ONLY.
+#
+# requirements.txt is the research environment — it carries wrds, jupyter,
+# ipykernel, matplotlib and seaborn, none of which dashboard/app.py imports.
+# Installing those on Render roughly triples build time and image size for code
+# that never runs there. Keep the two files in step when app.py gains an import.
+#
+# Compatible-release pins (~=) allow patch updates but block the minor/major
+# bumps that break APIs — dash 4→5 in particular.
+
+dash~=4.1.0
+dash-bootstrap-components~=2.0.4
+pandas~=2.2.3
+numpy~=2.4.4
+plotly~=6.7.0
+yfinance~=1.3.0
+scipy~=1.17.1
+statsmodels~=0.14.6
+gunicorn~=25.3.0
